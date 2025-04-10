@@ -1,0 +1,19 @@
+[package]
+authors.workspace = true
+description.workspace = true
+edition.workspace = true
+license.workspace = true
+name = "quantum_ipsec"
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+getrandom.workspace = true
+heapless.workspace = true
+rand_core.workspace = true
+serde.workspace = true
+
+[features]
+default = ["std"]
+no_std = []
+std = []
