@@ -5,7 +5,11 @@
 ## 🎯 Goals
 
 - Implement a complete IPSec stack with IKEv2 key negotiation
-- Integrate post-quantum cryptography using **Kyber** (KEM) and **Falcon** (digital signatures)
+- Integrate post-quantum cryptography using:
+  - **Kyber512** (Key Encapsulation Mechanism)
+  - **Falcon512** (Digital Signature Scheme)
+  - **Dilithium3** (Digital Signature Scheme)
+  - **SPHINCS+** (Digital Signature Scheme)
 - Build a developer-friendly CLI for testing, simulation, and tunnel management
 - Design for `no_std` compatibility targeting IIoT and embedded systems
 
@@ -15,6 +19,8 @@
 - Modular architecture using Rust workspaces and crates
 - Focused on security, testability, and clear documentation
 - Ready for benchmarking, simulation, and audit scenarios
+- Multiple post-quantum cryptographic primitives
+- Generic cryptographic interfaces for easy algorithm switching
 
 ## 💡 Motivation
 
@@ -26,6 +32,11 @@ With the rise of quantum computing, traditional cryptographic methods such as RS
 quantum-tunneler/
 ├── quantum_ipsec/          # Core library
 │   ├── crypto/             # Cryptographic primitives
+│   │   ├── kyber.rs        # Kyber512 KEM
+│   │   ├── falcon.rs       # Falcon512 signatures
+│   │   ├── dilithium.rs    # Dilithium3 signatures
+│   │   ├── sphincs.rs      # SPHINCS+ signatures
+│   │   └── traits.rs       # Generic crypto interfaces
 │   ├── ike/                # IKEv2 implementation
 │   ├── ipsec/              # IPSec implementation
 │   └── utils/              # Utility functions
@@ -71,7 +82,11 @@ Inspired by the article:
 
 ## 🔐 Current Status
 
-> Under development — Phase 1: Planning and architecture
+> Under development — Phase 2: Post-Quantum Cryptography Integration completed
+
+- ✅ Phase 1: Planning and Architecture
+- ✅ Phase 2: Post-Quantum Cryptography Integration
+- ⏳ Phase 3: IKEv2 Protocol Implementation (in progress)
 
 Contributions and feedback are welcome! Please feel free to open issues or submit pull requests on [GitHub](https://github.com/doomhammerhell/quantum-tunneler).
 
