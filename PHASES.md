@@ -23,17 +23,17 @@ This roadmap outlines the planned development phases for the `quantum-tunneler` 
 
 ---
 
-## ⏭️ Phase 3 – IKEv2 Protocol Implementation
-- [ ] Implement IKEv2 Phase 1 (Main Mode)
-  - [ ] SA_INIT exchange
-  - [ ] AUTH exchange with post-quantum signatures
-- [ ] Implement IKEv2 Phase 2 (Quick Mode)
-  - [ ] CHILD_SA negotiation
-  - [ ] Key derivation using Kyber
-- [ ] Implement Security Association management
-  - [ ] SA database
-  - [ ] SA lifetime management
-  - [ ] Rekeying procedures
+## ✅ Phase 3 – IKEv2 Protocol Implementation (completed)
+- [x] Implement IKEv2 Phase 1 (Main Mode)
+  - [x] SA_INIT exchange
+  - [x] AUTH exchange with post-quantum signatures
+- [x] Implement IKEv2 Phase 2 (Quick Mode)
+  - [x] CHILD_SA negotiation
+  - [x] Key derivation using Kyber
+- [x] Implement Security Association management
+  - [x] SA database
+  - [x] SA lifetime management
+  - [x] Rekeying procedures
 
 ---
 
