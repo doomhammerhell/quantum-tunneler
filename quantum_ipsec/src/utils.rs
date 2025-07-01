@@ -19,14 +19,14 @@ pub fn bytes_to_hex(bytes: &[u8]) -> String {
 /// Convert hex string to bytes
 pub fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, QuantumIpsecError> {
     if hex.len() % 2 != 0 {
-        return Err(QuantumIpsecError::InternalError("Invalid hex string length".into()));
+        return Err(QuantumIpsecError::PacketError("Invalid hex string length".into()));
     }
 
     (0..hex.len())
         .step_by(2)
         .map(|i| {
             u8::from_str_radix(&hex[i..i + 2], 16)
-                .map_err(|_| QuantumIpsecError::InternalError("Invalid hex character".into()))
+                .map_err(|_| QuantumIpsecError::PacketError("Invalid hex character".into()))
         })
         .collect()
 }

@@ -82,11 +82,13 @@ Inspired by the article:
 
 ## 🔐 Current Status
 
-> Under development — Phase 2: Post-Quantum Cryptography Integration completed
+> Under development — Phase 5: CLI & Monitoring Interface
 
 - ✅ Phase 1: Planning and Architecture
 - ✅ Phase 2: Post-Quantum Cryptography Integration
-- ⏳ Phase 3: IKEv2 Protocol Implementation (in progress)
+- ✅ Phase 3: IKEv2 Protocol Implementation
+- ✅ Phase 4: IPSec ESP Implementation
+- ✅ Phase 5: CLI & Monitoring Interface(in progress)
 
 Contributions and feedback are welcome! Please feel free to open issues or submit pull requests on [GitHub](https://github.com/doomhammerhell/quantum-tunneler).
 

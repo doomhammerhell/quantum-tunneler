@@ -1,14 +1,15 @@
-//! Cryptographic adapter for IKEv2 protocol.
+//! Cryptographic adapter for IKEv2 operations using post-quantum primitives
 //!
-//! This module provides an adapter between the IKEv2 protocol and the
-//! post-quantum cryptographic primitives (Kyber and Falcon).
+//! This module provides cryptographic operations for IKEv2 including
+//! post-quantum cryptographic primitives (Kyber and Dilithium).
 
+use crate::{QuantumIpsecError, Result};
 use crate::crypto::{
     traits::{KeyEncapsulation, DigitalSignature},
-    kyber::Kyber512,
-    falcon::Falcon512,
+    kyber::{Kyber512, KyberPublicKey, KyberSecretKey, KyberCiphertext, KYBER_PUBLICKEYBYTES, KYBER_SECRETKEYBYTES, KYBER_CIPHERTEXTBYTES},
+    dilithium::{Dilithium3, DilithiumPublicKey, DilithiumSecretKey, DilithiumSignature, DILITHIUM_PUBLICKEYBYTES, DILITHIUM_SECRETKEYBYTES, DILITHIUM_SIGNATUREBYTES},
 };
-use super::{IKEError, DebugContext};
+use crate::ike::debug::{DebugLevel, DebugContext};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
@@ -16,68 +17,90 @@ use sha2::Sha256;
 pub struct CryptoAdapter {
     /// Kyber KEM instance
     kem: Kyber512,
-    /// Falcon signature instance
-    sig: Falcon512,
+    /// Dilithium signature instance
+    sig: Dilithium3,
     /// Debug context
     debug: DebugContext,
 }
 
 impl CryptoAdapter {
-    /// Creates a new cryptographic adapter
-    pub fn new(debug_level: super::DebugLevel) -> Self {
+    /// Creates a new crypto adapter
+    pub fn new(debug_level: DebugLevel) -> Self {
         Self {
             kem: Kyber512,
-            sig: Falcon512,
+            sig: Dilithium3,
             debug: DebugContext::new(debug_level),
         }
     }
 
-    /// Generates a key pair for the specified role
-    pub fn generate_keypair(&self) -> Result<(Vec<u8>, Vec<u8>), IKEError> {
-        let (pk, sk) = self.kem.keygen();
-        self.debug.log_message(&format!("Generated key pair: pk_len={}, sk_len={}", pk.len(), sk.len()));
-        Ok((pk.to_vec(), sk.to_vec()))
+    /// Generate a new key pair
+    pub fn generate_keypair(&self) -> Result<(Vec<u8>, Vec<u8>)> {
+        let (pk, sk) = <Kyber512 as KeyEncapsulation>::keygen();
+        let pk_array = pk.as_ref().to_vec();
+        let sk_array = sk.as_ref().to_vec();
+        self.debug.log_message(&format!("Generated Kyber keypair: pk_len={}, sk_len={}", pk_array.len(), sk_array.len()));
+        Ok((pk_array, sk_array))
     }
 
-    /// Encapsulates a shared secret using the given public key
-    pub fn encapsulate(&self, pk: &[u8]) -> Result<(Vec<u8>, Vec<u8>), IKEError> {
-        let pk_array = pk.try_into().map_err(|_| IKEError::CryptoError)?;
-        let (ct, ss) = self.kem.encapsulate(&pk_array);
-        self.debug.log_message(&format!("Encapsulated shared secret: ct_len={}, ss_len={}", ct.len(), ss.len()));
-        Ok((ct.to_vec(), ss.to_vec()))
+    /// Encapsulate a shared secret using the given public key
+    pub fn encapsulate(&self, pk: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+        let pk_array: [u8; KYBER_PUBLICKEYBYTES] = pk.try_into()
+            .map_err(|_| QuantumIpsecError::PacketError("Conversão de chave falhou".into()))?;
+        
+        let pk_key = KyberPublicKey::from(pk_array);
+        let (ct, ss) = Kyber512::encapsulate(&pk_key);
+        let ct_array = ct.as_ref().to_vec();
+        let ss_array = ss.as_ref().to_vec();
+        
+        self.debug.log_message(&format!("Encapsulated shared secret: ct_len={}, ss_len={}", ct_array.len(), ss_array.len()));
+        Ok((ct_array, ss_array))
     }
 
-    /// Decapsulates a shared secret using the given secret key and ciphertext
-    pub fn decapsulate(&self, sk: &[u8], ct: &[u8]) -> Result<Vec<u8>, IKEError> {
-        let sk_array = sk.try_into().map_err(|_| IKEError::CryptoError)?;
-        let ct_array = ct.try_into().map_err(|_| IKEError::CryptoError)?;
-        let ss = self.kem.decapsulate(&sk_array, &ct_array);
-        self.debug.log_message(&format!("Decapsulated shared secret: ss_len={}", ss.len()));
-        Ok(ss.to_vec())
+    /// Decapsulate a shared secret using the given secret key and ciphertext
+    pub fn decapsulate(&self, sk: &[u8], ct: &[u8]) -> Result<Vec<u8>> {
+        let sk_array: [u8; KYBER_SECRETKEYBYTES] = sk.try_into()
+            .map_err(|_| QuantumIpsecError::PacketError("Conversão de chave falhou".into()))?;
+        let ct_array: [u8; KYBER_CIPHERTEXTBYTES] = ct.try_into()
+            .map_err(|_| QuantumIpsecError::PacketError("Conversão de chave falhou".into()))?;
+        
+        let sk_key = KyberSecretKey::from(sk_array);
+        let ct_key = KyberCiphertext::from(ct_array);
+        let ss = Kyber512::decapsulate(&sk_key, &ct_key);
+        let ss_array = ss.as_ref().to_vec();
+        
+        self.debug.log_message(&format!("Decapsulated shared secret: ss_len={}", ss_array.len()));
+        Ok(ss_array)
     }
 
     /// Signs a message using the given secret key
-    pub fn sign(&self, sk: &[u8], msg: &[u8]) -> Result<Vec<u8>, IKEError> {
-        let sk_array = sk.try_into().map_err(|_| IKEError::CryptoError)?;
-        let sig = self.sig.sign(&sk_array, msg);
-        self.debug.log_message(&format!("Signed message: msg_len={}, sig_len={}", msg.len(), sig.len()));
-        Ok(sig.to_vec())
+    pub fn sign(&self, sk: &[u8], msg: &[u8]) -> Result<Vec<u8>> {
+        let sk_array: [u8; DILITHIUM_SECRETKEYBYTES] = sk.try_into()
+            .map_err(|_| QuantumIpsecError::PacketError("Invalid secret key length".into()))?;
+        let sk_key = DilithiumSecretKey::from(sk_array);
+        let sig = Dilithium3::sign(&sk_key, msg);
+        let sig_array = sig.as_ref().to_vec();
+        self.debug.log_message(&format!("Signed message: msg_len={}, sig_len={}", msg.len(), sig_array.len()));
+        Ok(sig_array)
     }
 
     /// Verifies a signature for a message using the given public key
-    pub fn verify(&self, pk: &[u8], msg: &[u8], sig: &[u8]) -> Result<bool, IKEError> {
-        let pk_array = pk.try_into().map_err(|_| IKEError::CryptoError)?;
-        let sig_array = sig.try_into().map_err(|_| IKEError::CryptoError)?;
-        let result = self.sig.verify(&pk_array, msg, &sig_array);
+    pub fn verify(&self, pk: &[u8], msg: &[u8], sig: &[u8]) -> Result<bool> {
+        let pk_array: [u8; DILITHIUM_PUBLICKEYBYTES] = pk.try_into()
+            .map_err(|_| QuantumIpsecError::PacketError("Invalid public key length".into()))?;
+        let sig_array: [u8; DILITHIUM_SIGNATUREBYTES] = sig.try_into()
+            .map_err(|_| QuantumIpsecError::PacketError("Invalid signature length".into()))?;
+        let pk_key = DilithiumPublicKey::from(pk_array);
+        let sig_key = DilithiumSignature::from(sig_array);
+        let result = Dilithium3::verify(&pk_key, msg, &sig_key);
         self.debug.log_message(&format!("Verified signature: result={}", result));
         Ok(result)
     }
 
     /// Derives session keys from the shared secret
-    pub fn derive_session_keys(&self, shared_secret: &[u8], nonce_i: &[u8], nonce_r: &[u8]) -> Result<Vec<u8>, IKEError> {
+    pub fn derive_session_keys(&self, shared_secret: &[u8], nonce_i: &[u8], nonce_r: &[u8]) -> Result<Vec<u8>> {
         let mut key = [0u8; 32];
         let mut mac = Hmac::<Sha256>::new_from_slice(shared_secret)
-            .map_err(|_| IKEError::CryptoError)?;
+            .map_err(|_| QuantumIpsecError::PacketError("Conversão de chave falhou".into()))?;
         
         mac.update(nonce_i);
         mac.update(nonce_r);
@@ -88,9 +111,9 @@ impl CryptoAdapter {
     }
 
     /// Verifies authentication data
-    pub fn verify_auth_data(&self, auth_data: &[u8], shared_secret: &[u8], nonce_i: &[u8], nonce_r: &[u8]) -> Result<bool, IKEError> {
+    pub fn verify_auth_data(&self, auth_data: &[u8], shared_secret: &[u8], nonce_i: &[u8], nonce_r: &[u8]) -> Result<bool> {
         let mut mac = Hmac::<Sha256>::new_from_slice(shared_secret)
-            .map_err(|_| IKEError::CryptoError)?;
+            .map_err(|_| QuantumIpsecError::PacketError("Conversão de chave falhou".into()))?;
         
         mac.update(nonce_i);
         mac.update(nonce_r);
@@ -102,9 +125,9 @@ impl CryptoAdapter {
     }
 
     /// Creates authentication data for IKE_AUTH
-    pub fn create_auth_data(&self, shared_secret: &[u8], nonce_i: &[u8], nonce_r: &[u8]) -> Result<Vec<u8>, IKEError> {
+    pub fn create_auth_data(&self, shared_secret: &[u8], nonce_i: &[u8], nonce_r: &[u8]) -> Result<Vec<u8>> {
         let mut mac = Hmac::<Sha256>::new_from_slice(shared_secret)
-            .map_err(|_| IKEError::CryptoError)?;
+            .map_err(|_| QuantumIpsecError::PacketError("Conversão de chave falhou".into()))?;
         
         mac.update(nonce_i);
         mac.update(nonce_r);

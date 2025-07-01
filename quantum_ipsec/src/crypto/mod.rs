@@ -1,77 +1,80 @@
-use crate::QuantumIpsecError;
+//! Post-quantum cryptography primitives for quantum-tunneler
+//! 
+//! This module provides implementations of post-quantum cryptographic
+//! primitives including key encapsulation mechanisms (KEM) and digital
+//! signature schemes.
 
-/// Cryptographic primitives for quantum-safe operations
-pub mod primitives {
-    /// Post-quantum key exchange using Kyber
-    pub mod kyber {
-        /// Generate a key pair
-        pub fn generate_keypair() -> Result<(Vec<u8>, Vec<u8>), QuantumIpsecError> {
-            // TODO: Implement Kyber key generation
-            Err(QuantumIpsecError::CryptoError("Not implemented".into()))
-        }
+pub mod traits;
+pub mod kyber;
+pub mod dilithium;
 
-        /// Encapsulate a shared secret
-        pub fn encapsulate(pk: &[u8]) -> Result<(Vec<u8>, Vec<u8>), QuantumIpsecError> {
-            // TODO: Implement Kyber encapsulation
-            Err(QuantumIpsecError::CryptoError("Not implemented".into()))
-        }
+pub use traits::{KeyEncapsulation, DigitalSignature};
+pub use kyber::{Kyber512, KyberPublicKey, KyberSecretKey, KyberCiphertext, KyberSharedSecret};
+pub use dilithium::{Dilithium3, DilithiumPublicKey, DilithiumSecretKey, DilithiumSignature};
 
-        /// Decapsulate a shared secret
-        pub fn decapsulate(ct: &[u8], sk: &[u8]) -> Result<Vec<u8>, QuantumIpsecError> {
-            // TODO: Implement Kyber decapsulation
-            Err(QuantumIpsecError::CryptoError("Not implemented".into()))
-        }
-    }
+// Re-export constants for convenience
+pub use kyber::{
+    KYBER_PUBLICKEYBYTES,
+    KYBER_SECRETKEYBYTES,
+    KYBER_CIPHERTEXTBYTES,
+    KYBER_SSBYTES,
+};
 
-    /// Post-quantum signatures using Falcon
-    pub mod falcon {
-        /// Generate a signing key pair
-        pub fn generate_keypair() -> Result<(Vec<u8>, Vec<u8>), QuantumIpsecError> {
-            // TODO: Implement Falcon key generation
-            Err(QuantumIpsecError::CryptoError("Not implemented".into()))
-        }
-
-        /// Sign a message
-        pub fn sign(msg: &[u8], sk: &[u8]) -> Result<Vec<u8>, QuantumIpsecError> {
-            // TODO: Implement Falcon signing
-            Err(QuantumIpsecError::CryptoError("Not implemented".into()))
-        }
-
-        /// Verify a signature
-        pub fn verify(msg: &[u8], sig: &[u8], pk: &[u8]) -> Result<bool, QuantumIpsecError> {
-            // TODO: Implement Falcon verification
-            Err(QuantumIpsecError::CryptoError("Not implemented".into()))
-        }
-    }
-}
+pub use dilithium::{
+    DILITHIUM_PUBLICKEYBYTES,
+    DILITHIUM_SECRETKEYBYTES,
+    DILITHIUM_SIGNATUREBYTES,
+};
 
 /// Symmetric encryption primitives
 pub mod symmetric {
+    use crate::QuantumIpsecError;
+    use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
+    use aes_gcm::aead::{Aead, Payload};
+
     /// Encrypt data using AES-GCM
-    pub fn encrypt(key: &[u8], nonce: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, QuantumIpsecError> {
-        // TODO: Implement AES-GCM encryption
-        Err(QuantumIpsecError::CryptoError("Not implemented".into()))
+    pub fn encrypt(key: &[u8], nonce: &[u8], plaintext: &[u8], aad: &[u8]) -> std::result::Result<Vec<u8>, QuantumIpsecError> {
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+        let nonce = Nonce::from_slice(nonce);
+        let payload = Payload {
+            msg: plaintext,
+            aad,
+        };
+        
+        cipher.encrypt(nonce, payload)
+            .map_err(|e| QuantumIpsecError::CryptoError(format!("AES-GCM encryption failed: {}", e)))
     }
 
     /// Decrypt data using AES-GCM
-    pub fn decrypt(key: &[u8], nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, QuantumIpsecError> {
-        // TODO: Implement AES-GCM decryption
-        Err(QuantumIpsecError::CryptoError("Not implemented".into()))
+    pub fn decrypt(key: &[u8], nonce: &[u8], ciphertext: &[u8], aad: &[u8]) -> std::result::Result<Vec<u8>, QuantumIpsecError> {
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+        let nonce = Nonce::from_slice(nonce);
+        let payload = Payload {
+            msg: ciphertext,
+            aad,
+        };
+        
+        cipher.decrypt(nonce, payload)
+            .map_err(|e| QuantumIpsecError::CryptoError(format!("AES-GCM decryption failed: {}", e)))
     }
 }
 
 /// Hash functions
 pub mod hash {
+    use sha2::{Sha256, Sha384, Digest};
+
     /// Compute SHA-256 hash
     pub fn sha256(data: &[u8]) -> Vec<u8> {
-        // TODO: Implement SHA-256
-        vec![]
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        hasher.finalize().to_vec()
     }
 
     /// Compute SHA-384 hash
     pub fn sha384(data: &[u8]) -> Vec<u8> {
-        // TODO: Implement SHA-384
-        vec![]
+        let mut hasher = Sha384::new();
+        hasher.update(data);
+        hasher.finalize().to_vec()
     }
 }
 

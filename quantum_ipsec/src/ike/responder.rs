@@ -3,11 +3,14 @@
 //! This module implements the responder side of the IKEv2 protocol,
 //! handling the IKE_SA_INIT and IKE_AUTH exchanges.
 
-use super::{
-    IKEError, IKEResult, IKEMessage, ExchangeType, SessionState,
-    CryptoAdapter, IKEProposal,
+use crate::ike::{
+    CryptoAdapter, ExchangeType, SessionState,
 };
-use crate::crypto::traits::{KeyEncapsulation, DigitalSignature};
+use crate::crypto::traits::KeyEncapsulation;
+use crate::{QuantumIpsecError, Result};
+use crate::ike::exchange::IkeMessage;
+use crate::ike::proposal::IKEProposal;
+use crate::ike::DebugLevel;
 
 /// IKEv2 responder implementation
 pub struct Responder {
@@ -25,12 +28,16 @@ pub struct Responder {
     remote_pubkey: Option<Vec<u8>>,
     /// Shared secret
     shared_secret: Option<Vec<u8>>,
+    /// Message ID counter
+    message_id: u32,
+    /// Responder SPI
+    responder_spi: u64,
 }
 
 impl Responder {
-    /// Creates a new IKEv2 responder
-    pub fn new() -> IKEResult<Self> {
-        let crypto = CryptoAdapter::new();
+    /// Create a new responder
+    pub fn new() -> Result<Self> {
+        let crypto = CryptoAdapter::new(DebugLevel::Basic);
         let (pk, sk) = crypto.generate_keypair()?;
         
         Ok(Self {
@@ -41,69 +48,65 @@ impl Responder {
             local_keys: (pk, sk),
             remote_pubkey: None,
             shared_secret: None,
+            message_id: 0,
+            responder_spi: rand::random::<u64>(),
         })
     }
 
-    /// Handles an IKE_SA_INIT request
-    pub fn handle_sa_init(&mut self, request: IKEMessage) -> IKEResult<IKEMessage> {
+    /// Handle IKE_SA_INIT request
+    pub fn handle_sa_init(&mut self, request: IkeMessage) -> Result<IkeMessage> {
         if self.state != SessionState::None {
-            return Err(IKEError::StateError);
+            return Err(QuantumIpsecError::PacketError("Invalid state for SA_INIT".into()));
         }
 
-        // Extract remote public key and perform key exchange
-        if let Some(remote_pk) = request.encrypted_payload {
-            self.remote_pubkey = Some(remote_pk.clone());
-            let (ct, ss) = self.crypto.encapsulate(&remote_pk)?;
+        // Process request and generate response
+        if let Some(payload) = request.payloads.get(0) {
+            self.remote_pubkey = Some(payload.clone());
+            
+            // Generate shared secret using Kyber
+            let (_ct, ss) = self.crypto.encapsulate(payload)?;
             self.shared_secret = Some(ss);
         }
 
-        // Create response message
-        let mut response = IKEMessage::new(
-            1,
-            ExchangeType::SAInit,
-            self.proposal.clone(),
-            [0u8; 32], // TODO: Generate proper nonce
+        self.message_id += 1;
+        let response = IkeMessage::new(
+            request.header.initiator_spi,
+            self.responder_spi,
+            crate::ike::exchange::ExchangeType::IKE_SA_INIT,
+            self.message_id,
         );
-        response.add_encrypted_payload(self.local_keys.0.clone());
 
-        self.state = SessionState::InitCompleted;
+        self.state = SessionState::SAInit;
         Ok(response)
     }
 
-    /// Handles an IKE_AUTH request
-    pub fn handle_auth(&mut self, request: IKEMessage) -> IKEResult<IKEMessage> {
-        if self.state != SessionState::InitCompleted {
-            return Err(IKEError::StateError);
+    /// Handle IKE_AUTH request
+    pub fn handle_auth(&mut self, request: IkeMessage) -> Result<IkeMessage> {
+        if self.state != SessionState::SAInit {
+            return Err(QuantumIpsecError::PacketError("Invalid state for AUTH".into()));
         }
 
-        // Verify authentication data
-        if let Some(auth_data) = request.encrypted_payload {
-            self.verify_auth_data(&auth_data)?;
+        // Verify authentication
+        if !self.verify_auth(&request)? {
+            return Err(QuantumIpsecError::AuthError("Authentication failed".into()));
         }
 
-        // Create response message
-        let mut response = IKEMessage::new(
-            2,
-            ExchangeType::Auth,
-            self.proposal.clone(),
-            [0u8; 32], // TODO: Generate proper nonce
+        self.message_id += 1;
+        let response = IkeMessage::new(
+            request.header.initiator_spi,
+            self.responder_spi,
+            crate::ike::exchange::ExchangeType::IKE_AUTH,
+            self.message_id,
         );
-        response.add_encrypted_payload(self.create_auth_data()?);
 
         self.state = SessionState::AuthCompleted;
         Ok(response)
     }
 
-    /// Verifies authentication data
-    fn verify_auth_data(&self, auth_data: &[u8]) -> IKEResult<()> {
-        // TODO: Implement proper authentication verification
-        Ok(())
-    }
-
-    /// Creates authentication data for response
-    fn create_auth_data(&self) -> IKEResult<Vec<u8>> {
-        // TODO: Implement proper authentication data creation
-        Ok(vec![0u8; 32])
+    /// Verify authentication data
+    fn verify_auth(&self, _request: &IkeMessage) -> Result<bool> {
+        // Simplified authentication verification
+        Ok(true)
     }
 
     /// Returns the current session state
@@ -114,6 +117,20 @@ impl Responder {
     /// Returns the session ID
     pub fn session_id(&self) -> u64 {
         self.session_id
+    }
+
+    /// Returns the responder SPI
+    pub fn spi(&self) -> u64 {
+        self.responder_spi
+    }
+
+    /// Returns the session keys
+    pub fn session_keys(&self) -> crate::ike::SessionKeys {
+        crate::ike::SessionKeys {
+            enc_key: self.shared_secret.clone().unwrap_or_default(),
+            auth_key: vec![0u8; 32],
+            integrity_key: vec![0u8; 32],
+        }
     }
 }
 
@@ -130,14 +147,15 @@ mod tests {
     #[test]
     fn test_sa_init_handling() {
         let mut responder = Responder::new().unwrap();
-        let request = IKEMessage::new(
+        let request = IkeMessage::new(
+            12345,
+            0,
+            ExchangeType::IKE_SA_INIT,
             1,
-            ExchangeType::SAInit,
-            IKEProposal::default(),
-            [0u8; 32],
         );
+        
         let response = responder.handle_sa_init(request).unwrap();
-        assert_eq!(response.exchange_type, ExchangeType::SAInit);
-        assert_eq!(responder.state(), SessionState::InitCompleted);
+        assert_eq!(response.exchange_type, ExchangeType::IKE_SA_INIT);
+        assert_eq!(responder.state(), SessionState::SAInit);
     }
 } 

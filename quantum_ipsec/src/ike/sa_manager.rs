@@ -3,7 +3,9 @@
 //! This module implements the management of Security Associations (SAs)
 //! for both IKE and CHILD SAs, including lifetime management and rekeying.
 
-use super::{IKEError, IKEResult, IKEProposal, SessionState};
+use crate::{QuantumIpsecError, Result};
+use crate::ike::proposal::IKEProposal;
+use crate::ike::SessionState;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -124,36 +126,36 @@ impl SAManager {
     }
 
     /// Updates an IKE SA
-    pub fn update_ike_sa(&mut self, id: u32, sa: SecurityAssociation) -> IKEResult<()> {
+    pub fn update_ike_sa(&mut self, id: u32, sa: SecurityAssociation) -> Result<()> {
         if !self.ike_sas.contains_key(&id) {
-            return Err(IKEError::StateError);
+            return Err(QuantumIpsecError::PacketError("Estado inválido".into()));
         }
         self.ike_sas.insert(id, sa);
         Ok(())
     }
 
     /// Updates a CHILD SA
-    pub fn update_child_sa(&mut self, id: u32, sa: SecurityAssociation) -> IKEResult<()> {
+    pub fn update_child_sa(&mut self, id: u32, sa: SecurityAssociation) -> Result<()> {
         if !self.child_sas.contains_key(&id) {
-            return Err(IKEError::StateError);
+            return Err(QuantumIpsecError::PacketError("Estado inválido".into()));
         }
         self.child_sas.insert(id, sa);
         Ok(())
     }
 
     /// Removes an IKE SA
-    pub fn remove_ike_sa(&mut self, id: u32) -> IKEResult<()> {
+    pub fn remove_ike_sa(&mut self, id: u32) -> Result<()> {
         if !self.ike_sas.contains_key(&id) {
-            return Err(IKEError::StateError);
+            return Err(QuantumIpsecError::PacketError("Estado inválido".into()));
         }
         self.ike_sas.remove(&id);
         Ok(())
     }
 
     /// Removes a CHILD SA
-    pub fn remove_child_sa(&mut self, id: u32) -> IKEResult<()> {
+    pub fn remove_child_sa(&mut self, id: u32) -> Result<()> {
         if !self.child_sas.contains_key(&id) {
-            return Err(IKEError::StateError);
+            return Err(QuantumIpsecError::PacketError("Estado inválido".into()));
         }
         self.child_sas.remove(&id);
         Ok(())

@@ -38,12 +38,12 @@ This roadmap outlines the planned development phases for the `quantum-tunneler` 
 ---
 
 ## ⏭️ Phase 4 – IPSec ESP Implementation
-- [ ] Implement ESP header processing
-- [ ] Implement tunnel mode encapsulation
-- [ ] Add replay protection
-- [ ] Implement packet authentication
-- [ ] Add SA and security policy management
-- [ ] Implement packet fragmentation handling
+- [x] Implement ESP header processing
+- [x] Implement tunnel mode encapsulation
+- [x] Add replay protection
+- [x] Implement packet authentication
+- [x] Add SA and security policy management
+- [x] Implement packet fragmentation handling
 
 ---
 

@@ -1,38 +1,41 @@
-//! Implementation of the Falcon digital signature scheme.
+//! Implementation of the Dilithium digital signature scheme.
 //!
-//! This module provides an implementation of the Falcon-512 variant of the
-//! Falcon digital signature scheme, which is a post-quantum secure signature
+//! This module provides an implementation of the Dilithium3 variant of the
+//! Dilithium digital signature scheme, which is a post-quantum secure signature
 //! scheme.
 
 use super::traits::DigitalSignature;
 use core::fmt::Debug;
-use pqc_falcon::{keypair, sign, verify};
+use enc_rust::dilithium::{keypair, sign, verify, DILITHIUM_PUBLICKEYBYTES, DILITHIUM_SECRETKEYBYTES, DILITHIUM_SIGNATUREBYTES};
 
-/// Implementation of the Falcon-512 digital signature scheme.
+/// Implementation of the Dilithium3 digital signature scheme.
 ///
-/// This struct implements the `DigitalSignature` trait for the Falcon-512
-/// variant of the Falcon signature scheme.
-pub struct Falcon512;
+/// This struct implements the `DigitalSignature` trait for the Dilithium3
+/// variant of the Dilithium signature scheme.
+pub struct Dilithium3;
 
-impl DigitalSignature for Falcon512 {
-    type PublicKey = [u8; pqc_falcon::FALCON_PUBLICKEYBYTES];
-    type SecretKey = [u8; pqc_falcon::FALCON_SECRETKEYBYTES];
-    type Signature = [u8; pqc_falcon::FALCON_SIGNATUREBYTES];
+impl DigitalSignature for Dilithium3 {
+    type PublicKey = [u8; DILITHIUM_PUBLICKEYBYTES];
+    type SecretKey = [u8; DILITHIUM_SECRETKEYBYTES];
+    type Signature = [u8; DILITHIUM_SIGNATUREBYTES];
 
     fn keygen() -> (Self::PublicKey, Self::SecretKey) {
-        let mut pk = [0u8; pqc_falcon::FALCON_PUBLICKEYBYTES];
-        let mut sk = [0u8; pqc_falcon::FALCON_SECRETKEYBYTES];
-        keypair(&mut pk, &mut sk, None).expect("Failed to generate Falcon key pair");
+        let mut pk = [0u8; DILITHIUM_PUBLICKEYBYTES];
+        let mut sk = [0u8; DILITHIUM_SECRETKEYBYTES];
+        keypair(&mut pk, &mut sk, None).expect("Failed to generate Dilithium key pair");
         (pk, sk)
     }
 
     fn sign(sk: &Self::SecretKey, msg: &[u8]) -> Self::Signature {
-        let mut sig = [0u8; pqc_falcon::FALCON_SIGNATUREBYTES];
-        sign(&mut sig, msg, sk, None).expect("Failed to sign message with Falcon");
+        let mut sig = [0u8; DILITHIUM_SIGNATUREBYTES];
+        sign(&mut sig, msg, sk, None).expect("Failed to sign message with Dilithium");
         sig
     }
 
     fn verify(pk: &Self::PublicKey, msg: &[u8], sig: &Self::Signature) -> bool {
-        verify(sig, msg, pk).expect("Failed to verify Falcon signature")
+        verify(sig, msg, pk).expect("Failed to verify Dilithium signature")
     }
 } 
+
+// Alias para compatibilidade com código existente
+pub type Falcon512 = Dilithium3; 
