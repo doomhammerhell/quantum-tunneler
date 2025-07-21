@@ -3,6 +3,8 @@
 //! This module provides the Internet Key Exchange version 2 (IKEv2) protocol
 //! implementation with post-quantum cryptographic primitives.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 pub mod crypto_adapter;
 pub mod debug;
 pub mod exchange;
@@ -14,7 +16,6 @@ pub mod sa_manager;
 
 use crate::{QuantumIpsecError, Result};
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::io::Cursor;
 
@@ -32,7 +33,7 @@ pub enum SessionState {
 }
 
 /// IKEv2 message types
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum ExchangeType {
     IKE_SA_INIT,
     IKE_AUTH,
@@ -94,7 +95,7 @@ impl IkeProcessor {
 }
 
 /// IKEv2 Security Association
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct IkeSa {
     /// Initiator SPI
     pub initiator_spi: u64,
@@ -111,9 +112,9 @@ pub struct IkeSa {
     /// Session keys
     pub session_keys: Option<SessionKeys>,
     /// Creation time
-    pub created: Instant,
+    pub created: u64, // timestamp
     /// Last activity
-    pub last_activity: Instant,
+    pub last_activity: u64, // timestamp
 }
 
 /// IKEv2 states
@@ -147,6 +148,7 @@ pub struct SessionKeys {
 impl IkeProcessor {
     /// Handle IKE_SA_INIT exchange
     pub fn ike_sa_init(initiator: bool) -> Result<IkeSa> {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
         let mut sa = IkeSa {
             initiator_spi: 0,
             responder_spi: 0,
@@ -155,8 +157,8 @@ impl IkeProcessor {
             exchange_type: ExchangeType::IKE_SA_INIT_REQ,
             message_id: 0,
             session_keys: None,
-            created: Instant::now(),
-            last_activity: Instant::now(),
+            created: now,
+            last_activity: now,
         };
 
         if initiator {
@@ -200,7 +202,7 @@ impl IkeProcessor {
     /// Handle IKE_AUTH exchange
     pub fn ike_auth(sa: &mut IkeSa) -> Result<()> {
         sa.exchange_type = ExchangeType::IKE_AUTH_REQ;
-        sa.last_activity = Instant::now();
+        sa.last_activity = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
         if sa.is_initiator {
             let mut initiator = Initiator::new()?;
@@ -233,7 +235,7 @@ impl IkeProcessor {
     /// Handle CREATE_CHILD_SA exchange
     pub fn create_child_sa(sa: &mut IkeSa) -> Result<()> {
         sa.exchange_type = ExchangeType::CREATE_CHILD_SA_REQ;
-        sa.last_activity = Instant::now();
+        sa.last_activity = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
         // Simplified implementation
         Ok(())
@@ -242,7 +244,7 @@ impl IkeProcessor {
     /// Handle INFORMATIONAL exchange
     pub fn handle_informational(sa: &mut IkeSa) -> Result<()> {
         sa.exchange_type = ExchangeType::INFORMATIONAL_REQ;
-        sa.last_activity = Instant::now();
+        sa.last_activity = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
         // Simplified implementation
         Ok(())

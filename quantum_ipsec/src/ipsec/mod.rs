@@ -18,6 +18,7 @@ use utils::{parse_ip_header, serialize_ip_header, IpHeader};
 use std::net::{IpAddr, Ipv4Addr};
 use byteorder::WriteBytesExt;
 use rand;
+use serde::Serialize;
 
 /// Main IPSec processor that coordinates ESP, AH, SA, and policy management
 pub struct IpSecProcessor {
@@ -29,7 +30,7 @@ pub struct IpSecProcessor {
 }
 
 /// IPSec statistics
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct IpSecStats {
     pub packets_processed: u64,
     pub esp_packets: u64,
