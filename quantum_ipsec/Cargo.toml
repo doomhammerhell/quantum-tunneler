@@ -8,24 +8,21 @@ repository.workspace = true
 version.workspace = true
 
 [dependencies]
-getrandom = "0.2"
-heapless = "0.8"
-rand_core = "0.6"
-serde = {version = "1.0", features = ["derive"]}
-# Post-quantum cryptography
-enc_rust = "0.2.2"
-# Symmetric encryption and hashing
-aes-gcm.workspace = true
-sha2 = "0.10"
-# Network and binary handling
-byteorder = "1.4"
-# Error handling
-bincode = "1.3"
-hmac = "0.12"
-rand = "0.8"
-thiserror.workspace = true
+aes-gcm = { version = "0.10.3", features = ["zeroize"] }
+aes = { version = "0.8.4", features = ["zeroize"] }
+sha2 = "0.10.9"
+hkdf = "0.12.4"
+hmac = "0.12.1"
+zeroize = { version = "1.8", features = ["derive"] }
+getrandom = "0.2.17"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
 
-[features]
-default = ["std"]
-no_std = []
-std = []
+[dev-dependencies]
+proptest = "1.6"
+static_assertions = "1.1"
+criterion = "0.5"
+
+[[bench]]
+name = "esp"
+harness = false

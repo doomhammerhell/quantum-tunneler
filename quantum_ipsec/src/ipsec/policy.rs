@@ -1,12 +1,9 @@
-//! Security Policy Database (SPD) for quantum-safe IPSec.
-//!
-//! This module provides policy management for IPSec packet filtering and routing.
+//! Deterministic exact-address policy database, not yet integrated into a gateway.
 
 use crate::{QuantumIpsecError, Result};
-use heapless::Vec as HVec;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::collections::BTreeMap;
+use std::net::{IpAddr, Ipv4Addr};
 
 /// Policy action
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -41,9 +38,9 @@ pub enum PolicyProtocol {
 pub struct SecurityPolicy {
     /// Policy ID
     pub id: u32,
-    /// Source address range
+    /// Exact source address (unspecified address is wildcard)
     pub src_addr: IpAddr,
-    /// Destination address range
+    /// Exact destination address (unspecified address is wildcard)
     pub dst_addr: IpAddr,
     /// Protocol
     pub protocol: PolicyProtocol,
@@ -82,27 +79,58 @@ impl SecurityPolicy {
     }
 
     /// Check if policy matches packet
-    pub fn matches(&self, src: IpAddr, dst: IpAddr, protocol: u8, src_port: u16, dst_port: u16) -> bool {
+    pub fn matches(
+        &self,
+        src: IpAddr,
+        dst: IpAddr,
+        protocol: u8,
+        src_port: u16,
+        dst_port: u16,
+    ) -> bool {
         if !self.is_active {
             return false;
         }
 
         // Check addresses
-        if self.src_addr != src && self.src_addr != IpAddr::V4(Ipv4Addr::UNSPECIFIED) {
+        if self.src_addr != src
+            && !(self.src_addr.is_unspecified() && self.src_addr.is_ipv4() == src.is_ipv4())
+        {
             return false;
         }
-        if self.dst_addr != dst && self.dst_addr != IpAddr::V4(Ipv4Addr::UNSPECIFIED) {
+        if self.dst_addr != dst
+            && !(self.dst_addr.is_unspecified() && self.dst_addr.is_ipv4() == dst.is_ipv4())
+        {
             return false;
         }
 
         // Check protocol
         match self.protocol {
-            PolicyProtocol::Any => {},
-            PolicyProtocol::Tcp => if protocol != 6 { return false; },
-            PolicyProtocol::Udp => if protocol != 17 { return false; },
-            PolicyProtocol::Icmp => if protocol != 1 { return false; },
-            PolicyProtocol::Esp => if protocol != 50 { return false; },
-            PolicyProtocol::Ah => if protocol != 51 { return false; },
+            PolicyProtocol::Any => {}
+            PolicyProtocol::Tcp => {
+                if protocol != 6 {
+                    return false;
+                }
+            }
+            PolicyProtocol::Udp => {
+                if protocol != 17 {
+                    return false;
+                }
+            }
+            PolicyProtocol::Icmp => {
+                if protocol != 1 {
+                    return false;
+                }
+            }
+            PolicyProtocol::Esp => {
+                if protocol != 50 {
+                    return false;
+                }
+            }
+            PolicyProtocol::Ah => {
+                if protocol != 51 {
+                    return false;
+                }
+            }
         }
 
         // Check ports
@@ -120,7 +148,7 @@ impl SecurityPolicy {
 /// Security Policy Database
 pub struct SecurityPolicyDatabase {
     /// Map of policy ID to policy
-    policies: HashMap<u32, SecurityPolicy>,
+    policies: BTreeMap<u32, SecurityPolicy>,
     /// Maximum number of policies
     max_policies: usize,
 }
@@ -129,17 +157,20 @@ impl SecurityPolicyDatabase {
     /// Create a new SPD
     pub fn new(max_policies: usize) -> Self {
         Self {
-            policies: HashMap::new(),
+            policies: BTreeMap::new(),
             max_policies,
         }
     }
 
     /// Add policy to database
     pub fn add_policy(&mut self, policy: SecurityPolicy) -> Result<()> {
+        if self.policies.contains_key(&policy.id) {
+            return Err(QuantumIpsecError::Duplicate);
+        }
         if self.policies.len() >= self.max_policies {
             return Err(QuantumIpsecError::PacketError("SPD full".into()));
         }
-        
+
         self.policies.insert(policy.id, policy);
         Ok(())
     }
@@ -167,11 +198,11 @@ impl SecurityPolicyDatabase {
         let mut best_priority = 0u32;
 
         for policy in self.policies.values() {
-            if policy.matches(src, dst, protocol, src_port, dst_port) {
-                if policy.priority > best_priority {
-                    best_match = Some(policy);
-                    best_priority = policy.priority;
-                }
+            if policy.matches(src, dst, protocol, src_port, dst_port)
+                && (best_match.is_none() || policy.priority > best_priority)
+            {
+                best_match = Some(policy);
+                best_priority = policy.priority;
             }
         }
 
@@ -193,8 +224,8 @@ impl SecurityPolicyDatabase {
 pub fn example_policy() -> SecurityPolicy {
     SecurityPolicy {
         id: 1,
-        src_addr: "10.0.0.1".parse().unwrap(),
-        dst_addr: "10.0.0.2".parse().unwrap(),
+        src_addr: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+        dst_addr: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
         protocol: PolicyProtocol::Esp,
         action: PolicyAction::Require,
         src_port: 0,
@@ -205,8 +236,8 @@ pub fn example_policy() -> SecurityPolicy {
 }
 
 /// Adiciona uma policy à base de dados
-pub fn add_policy(spd: &mut SecurityPolicyDatabase, policy: SecurityPolicy) {
-    let _ = spd.add_policy(policy);
+pub fn add_policy(spd: &mut SecurityPolicyDatabase, policy: SecurityPolicy) -> Result<()> {
+    spd.add_policy(policy)
 }
 
 #[cfg(test)]
@@ -217,17 +248,17 @@ mod tests {
     #[test]
     fn test_policy_matching() {
         let mut spd = SecurityPolicyDatabase::new(10);
-        
+
         let policy = SecurityPolicy::new(
             1,
-            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 0)),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)),
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
             PolicyProtocol::Tcp,
             PolicyAction::Require,
         );
-        
+
         spd.add_policy(policy).unwrap();
-        
+
         let matching = spd.find_matching_policy(
             IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)),
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
@@ -235,15 +266,15 @@ mod tests {
             80,
             443,
         );
-        
+
         assert!(matching.is_some());
         assert_eq!(matching.unwrap().action, PolicyAction::Require);
     }
 
     #[test]
-    fn test_subnet_matching() {
+    fn test_no_implicit_subnet_matching() {
         let mut spd = SecurityPolicyDatabase::new(10);
-        
+
         let policy = SecurityPolicy::new(
             1,
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 0)),
@@ -251,9 +282,9 @@ mod tests {
             PolicyProtocol::Any,
             PolicyAction::Allow,
         );
-        
+
         spd.add_policy(policy).unwrap();
-        
+
         let matching = spd.find_matching_policy(
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
@@ -261,8 +292,7 @@ mod tests {
             80,
             443,
         );
-        
-        assert!(matching.is_some());
-        assert_eq!(matching.unwrap().action, PolicyAction::Allow);
+
+        assert!(matching.is_none());
     }
-} 
+}

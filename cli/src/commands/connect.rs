@@ -1,8 +1,5 @@
+use crate::utils::CliError;
 use clap::Args;
-use crate::utils::{CliError, print_output};
-use quantum_ipsec::IkeProcessor;
-
-/// Establish a tunnel with a peer using IKEv2 negotiation.
 #[derive(Args, Debug, Clone)]
 pub struct ConnectArgs {
     /// Peer IP address
@@ -13,9 +10,8 @@ pub struct ConnectArgs {
     pub mode: String,
 }
 
-pub async fn run(args: ConnectArgs, global: &crate::Cli) -> Result<(), CliError> {
-    // For now, just simulate IKEv2 negotiation
-    let sa = IkeProcessor::ike_sa_init(true).map_err(CliError::from)?;
-    print_output(&sa, &global.output_format, global.verbose);
-    Ok(())
-} 
+pub async fn run(_args: ConnectArgs, _global: &crate::Cli) -> Result<(), CliError> {
+    Err(CliError::Other(
+        "authenticated IKEv2 negotiation is unavailable".into(),
+    ))
+}

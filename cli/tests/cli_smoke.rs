@@ -1,73 +1,79 @@
 use assert_cmd::Command;
-
 #[test]
-fn test_init() {
-    let mut cmd = Command::cargo_bin("quantum-ipsec").unwrap();
-    cmd.arg("init");
-    cmd.assert().success();
+fn init_creates_only_config_and_does_not_overwrite() {
+    let dir = tempfile::tempdir().unwrap();
+    Command::cargo_bin("quantum-ipsec")
+        .unwrap()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    assert!(dir.path().join("quantum-ipsec.toml").exists());
+    assert!(!dir.path().join("quantum-ipsec.keypair").exists());
+    Command::cargo_bin("quantum-ipsec")
+        .unwrap()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .failure();
 }
-
 #[test]
-fn test_connect() {
-    let mut cmd = Command::cargo_bin("quantum-ipsec").unwrap();
-    cmd.arg("connect").arg("--peer").arg("127.0.0.1");
-    cmd.assert().success();
-}
-
-#[test]
-fn test_status() {
-    let mut cmd = Command::cargo_bin("quantum-ipsec").unwrap();
-    cmd.arg("status");
-    cmd.assert().success();
-}
-
-#[test]
-fn test_encrypt() {
-    // Assume dummy files/SA exist or mock
-    let mut cmd = Command::cargo_bin("quantum-ipsec").unwrap();
-    cmd.arg("encrypt").arg("--sa").arg("dummy.sa").arg("--input").arg("dummy.in").arg("--output").arg("dummy.out");
-    let _ = cmd.output(); // Não falha se arquivos não existem
-}
-
-#[test]
-fn test_decrypt() {
-    // Assume dummy files/SA exist ou mock
-    let mut cmd = Command::cargo_bin("quantum-ipsec").unwrap();
-    cmd.arg("decrypt").arg("--sa").arg("dummy.sa").arg("--input").arg("dummy.pkt");
-    let _ = cmd.output();
-}
-
-#[test]
-fn test_benchmark() {
-    let mut cmd = Command::cargo_bin("quantum-ipsec").unwrap();
-    cmd.arg("benchmark").arg("--duration").arg("1");
-    cmd.assert().success();
-}
-
-#[test]
-fn test_config_get() {
-    let mut cmd = Command::cargo_bin("quantum-ipsec").unwrap();
-    cmd.arg("config").arg("get").arg("debug");
-    let _ = cmd.output();
-}
-
-#[test]
-fn test_monitor() {
-    // Executa monitor por 1 segundo e envia 'q' para sair
-    use std::process::{Command as StdCommand, Stdio};
-    use std::io::Write;
-    let mut child = StdCommand::new("cargo")
-        .arg("run")
-        .arg("--")
-        .arg("monitor")
-        .arg("--interval").arg("500")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .spawn()
-        .unwrap();
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(b"q");
+fn unavailable_operations_fail_closed() {
+    for args in [
+        vec!["connect", "--peer", "127.0.0.1"],
+        vec![
+            "encrypt", "--sa", "dummy", "--input", "dummy", "--output", "dummy",
+        ],
+        vec!["decrypt", "--sa", "dummy", "--input", "dummy"],
+        vec!["monitor"],
+    ] {
+        Command::cargo_bin("quantum-ipsec")
+            .unwrap()
+            .args(args)
+            .assert()
+            .failure();
     }
-    let _ = child.wait();
-} 
+}
+#[test]
+fn status_reports_disconnected() {
+    let output = Command::cargo_bin("quantum-ipsec")
+        .unwrap()
+        .args(["status", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(v["runtime"], "not-connected");
+    assert!(v["active_sas"].is_null());
+}
+#[test]
+fn invalid_config_does_not_silently_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    Command::cargo_bin("quantum-ipsec")
+        .unwrap()
+        .current_dir(dir.path())
+        .arg("init")
+        .assert()
+        .success();
+    for (key, value) in [
+        ("max_sas", "no"),
+        ("debug", "yes"),
+        ("sa_lifetime", "0"),
+        ("unknown", "1"),
+    ] {
+        Command::cargo_bin("quantum-ipsec")
+            .unwrap()
+            .current_dir(dir.path())
+            .args(["config", "set", key, value])
+            .assert()
+            .failure();
+    }
+}
+#[test]
+fn benchmark_rejects_unbounded_input() {
+    Command::cargo_bin("quantum-ipsec")
+        .unwrap()
+        .args(["benchmark", "--payload-size", "99999999"])
+        .assert()
+        .failure();
+}

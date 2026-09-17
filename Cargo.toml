@@ -1,4 +1,6 @@
 [workspace]
+resolver = "2"
+exclude = ["fuzz"]
 members = [
   "quantum_ipsec",
   "cli",
@@ -6,25 +8,8 @@ members = [
 
 [workspace.package]
 authors = ["Mayckon Giovani <mayckonrlyeh@gmail.com>"]
-description = "Quantum-Safe IPSec implementation in Rust"
+description = "Experimental IPsec hardening primitives and bounded IKE parsing"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/doomhammerhell/quantum-tunneler"
 version = "0.1.0"
-
-[workspace.dependencies]
-clap = {version = "4.4", features = ["derive"]}
-getrandom = "0.2"
-heapless = "0.8"
-rand_core = "0.6"
-serde = {version = "1.0", features = ["derive"]}
-serde_json = "1.0"
-# Post-quantum cryptography dependencies
-enc_rust = "0.2.2"
-# Symmetric encryption and hashing
-aes-gcm = "0.10"
-sha2 = "0.10"
-# Network and binary handling
-byteorder = "1.4"
-# Error handling
-thiserror = "1.0"

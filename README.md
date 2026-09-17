@@ -1,104 +1,47 @@
-# quantum-tunneler
+# Quantum Tunneler
 
-**Quantum-Tunneler** is a pure Rust implementation of a **Quantum-Safe IPSec protocol**, inspired by Aliro Technologies' approach to real-world post-quantum secure networking. The goal is to build a robust and extensible cryptographic stack for VPNs, embedded systems, and critical infrastructure, with native support for post-quantum cryptography.
+An experimental Rust IPsec protocol-hardening foundation. **This is not a working VPN, an authenticated IKEv2 implementation, or a production-ready quantum-safe stack.**
 
-## 🎯 Goals
+The forensic audit found simulated cryptography, XOR-based ESP, authentication bypasses and secret serialization. Those implementations have been removed. The supported executable core is now an AES-256-GCM ESP packet primitive with externally provisioned, in-memory, directional SAs; bounded IKE structural parsing; experimental HKDF provisioning; and isolated IKE PRF key-schedule arithmetic.
 
-- Implement a complete IPSec stack with IKEv2 key negotiation
-- Integrate post-quantum cryptography using:
-  - **Kyber512** (Key Encapsulation Mechanism)
-  - **Falcon512** (Digital Signature Scheme)
-  - **Dilithium3** (Digital Signature Scheme)
-  - **SPHINCS+** (Digital Signature Scheme)
-- Build a developer-friendly CLI for testing, simulation, and tunnel management
-- Design for `no_std` compatibility targeting IIoT and embedded systems
+## Implemented
 
-## ✨ Technical Highlights
+- ESP AES-256-GCM-16 framing, deterministic salt/counter nonces, encrypted padding/trailer and mandatory tags.
+- 64-packet replay window, authenticate-before-commit, hard lifetime/packet/byte limits, checked counters and generation replacement.
+- Secret wrappers with zeroization on drop, redacted Debug and no secret serialization or Clone.
+- Bounded IKE header/payload/proposal parsing; explicit failure for unavailable negotiation.
+- Security property tests, known-answer fixtures, fuzz targets and reproducible ESP benchmarks.
 
-- 100% Rust-based implementation
-- Modular architecture using Rust workspaces and crates
-- Focused on security, testability, and clear documentation
-- Ready for benchmarking, simulation, and audit scenarios
-- Multiple post-quantum cryptographic primitives
-- Generic cryptographic interfaces for easy algorithm switching
+## Unavailable
 
-## 💡 Motivation
+Authenticated IKE and CHILD_SA negotiation, real ML-KEM/ML-DSA providers, hybrid exchanges, QKD, live tunnel routing, TUN/TAP and a daemon. `connect`, file-based `encrypt`/`decrypt` and `monitor` fail explicitly. `status` reports no connected runtime; it does not invent tunnel statistics. AH and ChaCha20-Poly1305 are not supported.
 
-With the rise of quantum computing, traditional cryptographic methods such as RSA and ECC are becoming vulnerable. This project aims to proactively address this threat by exploring practical and secure quantum-safe networking strategies.
+This workspace **requires std**. The misleading `no_std` feature was removed. A future allocator-capable core/platform split is planned, not implemented.
 
-## 📦 Project Structure
+## Build and verification
 
-```
-quantum-tunneler/
-├── quantum_ipsec/          # Core library
-│   ├── crypto/             # Cryptographic primitives
-│   │   ├── kyber.rs        # Kyber512 KEM
-│   │   ├── falcon.rs       # Falcon512 signatures
-│   │   ├── dilithium.rs    # Dilithium3 signatures
-│   │   ├── sphincs.rs      # SPHINCS+ signatures
-│   │   └── traits.rs       # Generic crypto interfaces
-│   ├── ike/                # IKEv2 implementation
-│   ├── ipsec/              # IPSec implementation
-│   └── utils/              # Utility functions
-├── cli/                    # Command-line interface
-└── docs/                   # Technical documentation
+```sh
+cargo build --workspace --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo fmt --all -- --check
+cargo run -p quantum-ipsec-cli -- init
+cargo run -p quantum-ipsec-cli -- status --json
+cargo run --release -p quantum-ipsec-cli -- benchmark --duration 1 --payload-size 1400
+cargo bench -p quantum_ipsec --bench esp
 ```
 
-## 🚀 Getting Started
+The binary is named `quantum-ipsec`. `init` creates configuration only, refuses overwrite, and creates no private key file. Benchmarking uses synthetic laboratory provisioning, not IKE or physical QKD. See [fuzzing instructions](fuzz/README.md).
 
-### Prerequisites
+## Engineering status
 
-- Rust 2021 edition or later
-- Cargo package manager
+Phase 6.5 is **partially completed**: unsafe active paths are contained and packet/parser foundations are tested, but authenticated IKE and interoperability remain release gates. QKD implementation is deliberately deferred until these gates pass. No complete RFC, FIPS validation or ETSI interoperability claim is made.
 
-### Installation
+- [Forensic audit](SECURITY_AUDIT.md)
+- [Hardening report](HARDENING_REPORT.md)
+- [Final implementation status](IMPLEMENTATION_STATUS.md)
+- [Architecture](ARCHITECTURE.md), [roadmap](PHASES.md)
+- [Threat model](THREAT_MODEL.md), [standards inventory](STANDARDS.md)
+- [Protocol limitations](docs/protocol-limitations.md), [QKD design](QKD_ARCHITECTURE.md)
 
-```bash
-git clone https://github.com/doomhammerhell/quantum-tunneler.git
-cd quantum-tunneler
-cargo build
-```
-
-### Usage
-
-```bash
-# Initialize the system
-quantum-ipsec-cli init --security-level 128 --max-sas 1024
-
-# Connect to a remote endpoint
-quantum-ipsec-cli connect --remote 192.168.1.1 --local 192.168.1.2
-
-# Check status
-quantum-ipsec-cli status
-
-# Run benchmarks
-quantum-ipsec-cli benchmark
-```
-
-## 🧠 Inspiration
-
-Inspired by the article:  
-[Real-World Implementation of Quantum-Safe IPSec – Aliro](https://www.aliroquantum.com/blog/real-world-implementation-of-quantum-safe-ipsec)
-
-## 🔐 Current Status
-
-> Under development — Phase 5: CLI & Monitoring Interface
-
-- ✅ Phase 1: Planning and Architecture
-- ✅ Phase 2: Post-Quantum Cryptography Integration
-- ✅ Phase 3: IKEv2 Protocol Implementation
-- ✅ Phase 4: IPSec ESP Implementation
-- ✅ Phase 5: CLI & Monitoring Interface(in progress)
-
-Contributions and feedback are welcome! Please feel free to open issues or submit pull requests on [GitHub](https://github.com/doomhammerhell/quantum-tunneler).
-
-## 📚 Documentation
-
-- [Architecture](ARCHITECTURE.md) - Detailed technical architecture
-- [Phases](PHASES.md) - Project roadmap and milestones
-
-## 📝 License
-
-This project is licensed under either of:
-- Apache License, Version 2.0
-- MIT License 
+Licensed under MIT OR Apache-2.0 as declared in the workspace manifest.

@@ -1,0 +1,40 @@
+[package]
+name = "quantum-ipsec-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+[package.metadata]
+cargo-fuzz = true
+[dependencies]
+libfuzzer-sys = "0.4"
+quantum_ipsec = { path = "../quantum_ipsec" }
+[[bin]]
+name = "ike_header"
+path = "fuzz_targets/ike_header.rs"
+test = false
+doc = false
+bench = false
+[[bin]]
+name = "ike_payload"
+path = "fuzz_targets/ike_payload.rs"
+test = false
+doc = false
+bench = false
+[[bin]]
+name = "esp_packet"
+path = "fuzz_targets/esp_packet.rs"
+test = false
+doc = false
+bench = false
+[[bin]]
+name = "sa_proposal"
+path = "fuzz_targets/sa_proposal.rs"
+test = false
+doc = false
+bench = false
+[[bin]]
+name = "ip_packet"
+path = "fuzz_targets/ip_packet.rs"
+test = false
+doc = false
+bench = false

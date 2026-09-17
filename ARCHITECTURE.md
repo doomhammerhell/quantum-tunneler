@@ -1,58 +1,37 @@
-# Project Architecture – quantum-tunneler
+# Architecture
 
-This document outlines the core structure and logic of the `quantum-tunneler` project, including module responsibilities and high-level data flow.
+## Current executable boundary
 
-For the latest updates and source code, visit our [GitHub repository](https://github.com/doomhammerhell/quantum-tunneler).
+The library requires std and forbids local unsafe code. `crypto/secret.rs` owns secret buffers; `crypto/symmetric.rs` wraps AES-256-GCM; `keying/schedule.rs` derives directional laboratory traffic keys. `ipsec/sa.rs` owns each unidirectional SA, its key/salt, counter, monotonic lifetime, usage budget, provenance and replay state. `ipsec/esp.rs` only seals/opens packets using those keys. No packet operation invokes public-key cryptography or creates an identity.
 
----
+An SA is unidirectional, as required by the IPsec architecture. Two traffic directions use different keys and receiver-selected SPIs. The example target containing inbound/outbound keys in one SA is therefore represented by two owned SAs. `TrafficKeys` is a transient derivation result, not the SAD entry. The context's initiator SPI receives responder-to-initiator traffic; the responder SPI receives initiator-to-responder traffic.
 
-## 📁 Core Modules
+`IpSecProcessor` dispatches by explicit SPI, counts nonsecret outcomes, and never creates SAs implicitly. It is a packet laboratory interface, not a policy-enforcing network gateway. The exact-address SPD remains a separate deterministic utility; routing and authenticated selector enforcement are unavailable. No unprotected fallback is performed by the top-level processor.
 
-### `crypto/`
-- Implements post-quantum algorithms (Kyber, Falcon)
-- Provides interfaces for key exchange and digital signatures
-- Uses `no_std`-friendly data structures via `heapless`
+`ike/parser.rs` borrows bounded wire slices. `ike/proposal.rs` validates nested lengths and chains without assigning invented algorithm IDs. `ike/schedule.rs` provides isolated PRF arithmetic. `IkeProcessor` cannot enter an authenticated or established state: negotiation fails explicitly. Former initiator/responder, mock crypto adapter, packet-signing AH and duplicate SA implementations are removed, with small migration notices at their old paths.
 
-### `ike/`
-- Handles IKEv2 key negotiation (Phase 1 and 2)
-- Establishes initial session agreements using post-quantum primitives
-- Interfaces directly with the `crypto` module
+The CLI writes nonsecret config, reports capabilities and runs real ESP microbenchmarks. It neither loads traffic keys from files nor pretends to control a daemon. This prevents restarting the CLI from resetting a live GCM nonce counter.
 
-### `ipsec/`
-- Encapsulates data with IPSec (ESP and AH protocols)
-- Manages Security Associations (SAs) and Security Policies
-- Provides replay protection and packet encryption/integrity
+## Ownership and failure containment
 
-### `utils.rs`
-- Shared utilities: logging, type aliases, error definitions
+All packet mutation takes exclusive `&mut SecurityAssociation`. Nonce reservation happens before seal. Inbound replay precheck does not mutate state; authentication, padding validation and replay commit occur within the same exclusive borrow. Key objects have no Clone or serde implementation. Public metadata is separate and safe to serialize. Keys are bound to their derivation SPI and provenance before admission.
 
----
+The SAD uses bounded lifetime admissions and SPI tombstones to reject reinstallation. A replacement generation is validated and admitted before the old generation retires. Outbound retiring SAs stop immediately; inbound retiring SAs may drain until explicit retirement or their original hard lifetime. This is local lifecycle support, not peer-negotiated rekey.
 
-## 🔁 General Connection Flow
+## Planned control plane
 
-1. CLI executes a command such as `connect`
-2. CLI invokes IKEv2 negotiation through the `ike` module
-3. `ike` handles key exchange using `crypto` module
-4. Once SAs are established, `ipsec` starts encrypting traffic
-5. Packets are securely transmitted over the tunnel
+```text
+X25519 → initial IKE keys
+           ↓ encrypted IKE_INTERMEDIATE / ML-KEM-768
+         sequential RFC 9370 schedule update
+           ↓ identity authentication + transcript verification
+         IKE SA → CHILD_SA KEYMAT → directional ESP SAs
+```
 
----
+A future `KeySource` interface should return typed, owned, zeroizing contributions tied to exchange context. It must not collapse different KE protocols into an unauthenticated `Vec<u8>` concatenation. A PSK provider is an authentication/key-source policy choice, not an automatic substitute for failed PQC. The experimental HKDF provisioning module must never replace the standardized IKE schedule.
 
-## 🧩 CLI Integration
+Optional QKD adds a separate provider/KME trust boundary. It is not wired into core IKE or ESP. See [QKD design](QKD_ARCHITECTURE.md) for reservation, consumption and outage semantics. The long-term daemon owns counters, SAs, IKE retransmissions, QKD pools and an authenticated Unix-socket control API. CLI output contains metadata only.
 
-The CLI serves as an interface to test and manage tunnels using the core library:
+## Operational limits
 
-- `init`: Initialize default configs
-- `connect`: Simulate secure connection
-- `status`: Show session state
-- `benchmark`: Measure performance and timing
-
----
-
-## 🔮 Future Extensions
-
-- Real transport integration (UDP/TCP)
-- NAT traversal support
-- WireGuard compatibility layer
-- Server mode with mTLS/PSK
-- Secure PACS and VPN applications for healthcare 
+No crash-safe key/counter restoration, traffic selectors, network I/O, fragmentation/reassembly, NAT traversal or real peer authentication exists. Every process restart needs fresh authenticated key establishment before traffic is allowed. Interoperability with an independent IPsec implementation and dependency-side secret-lifetime review remain required.

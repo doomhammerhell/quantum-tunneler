@@ -4,7 +4,11 @@ mod utils;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "quantum-ipsec", version, about = "Quantum-safe IPSec CLI")]
+#[command(
+    name = "quantum-ipsec",
+    version,
+    about = "Experimental IPsec hardening laboratory (no live tunnel support)"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -43,4 +47,4 @@ async fn main() -> Result<(), utils::CliError> {
         Commands::Config(args) => commands::config::run(args.clone(), &cli).await,
         Commands::Monitor(args) => commands::monitor::run(args.clone(), &cli).await,
     }
-} 
+}

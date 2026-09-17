@@ -1,39 +1,71 @@
+use crate::utils::{print_output, CliError};
 use clap::Args;
-use crate::utils::{CliError, print_output};
-use quantum_ipsec::{IkeProcessor, ipsec::esp::encrypt_packet, SecurityAssociation};
-use std::time::Instant;
-
-/// Benchmark handshake latency and packet throughput.
+use quantum_ipsec::{
+    crypto::secret::SecretBytes,
+    ipsec::{
+        esp::{decrypt_packet, encrypt_packet, MAX_PLAINTEXT},
+        sa::{Direction, SaLifetime, SecurityAssociation},
+    },
+    keying::schedule::{derive_traffic_keys, KeyContext},
+    utils::random_array,
+};
+use std::time::{Duration, Instant};
 #[derive(Args, Debug, Clone)]
 pub struct BenchmarkArgs {
-    /// Duration in seconds
-    #[arg(long, default_value = "10")]
+    #[arg(long, default_value = "1")]
     pub duration: u64,
-    /// Payload size in bytes
-    #[arg(long, default_value = "1024")]
+    #[arg(long, default_value = "1400")]
     pub payload_size: usize,
 }
-
 pub async fn run(args: BenchmarkArgs, global: &crate::Cli) -> Result<(), CliError> {
+    if args.duration == 0 || args.duration > 60 || args.payload_size > MAX_PLAINTEXT {
+        return Err(CliError::Other(
+            "duration must be 1..60 and payload within ESP limit".into(),
+        ));
+    }
+    let context = KeyContext {
+        initiator_spi: 256,
+        responder_spi: 257,
+        session_id: random_array()?,
+        transcript_hash: [1; 32],
+        generation: 1,
+    };
+    let master = SecretBytes::new(random_array()?);
+    let (a, pa) = derive_traffic_keys(SecretBytes::new(*master.expose()), &context)?;
+    let (b, pb) = derive_traffic_keys(SecretBytes::new(*master.expose()), &context)?;
+    let limits = SaLifetime {
+        max_age: Duration::from_secs(120),
+        max_packets: u32::MAX as u64,
+        max_bytes: u64::MAX,
+        rekey_after_packets: 1_000_000,
+    };
+    let mut tx = SecurityAssociation::new(
+        257,
+        Direction::Outbound,
+        a.initiator_to_responder,
+        limits,
+        pa,
+    )?;
+    let mut rx = SecurityAssociation::new(
+        257,
+        Direction::Inbound,
+        b.initiator_to_responder,
+        limits,
+        pb,
+    )?;
+    let payload = vec![0u8; args.payload_size];
     let start = Instant::now();
-    let mut handshakes = 0;
-    let mut packets = 0;
-    while start.elapsed().as_secs() < args.duration {
-        let sa = IkeProcessor::ike_sa_init(true).map_err(CliError::from)?;
-        handshakes += 1;
-        let dummy_sa = SecurityAssociation::new().map_err(CliError::from)?;
-        let payload = vec![0u8; args.payload_size];
-        let _ = encrypt_packet(&dummy_sa, &payload);
+    let mut packets = 0u64;
+    while start.elapsed() < Duration::from_secs(args.duration) {
+        let wire = encrypt_packet(&mut tx, &payload, 4)?;
+        let opened = decrypt_packet(&mut rx, &wire)?;
+        if opened.payload != payload {
+            return Err(CliError::Other("round trip mismatch".into()));
+        }
         packets += 1;
     }
-    let elapsed = start.elapsed().as_secs_f64();
-    let result = serde_json::json!({
-        "handshakes": handshakes,
-        "packets": packets,
-        "elapsed_sec": elapsed,
-        "handshakes_per_sec": handshakes as f64 / elapsed,
-        "packets_per_sec": packets as f64 / elapsed,
-    });
-    print_output(&result, &global.output_format, global.verbose);
+    let seconds = start.elapsed().as_secs_f64();
+    let report = serde_json::json!({"benchmark":"laboratory ESP seal+open including allocation", "packets":packets,"payload_bytes":args.payload_size,"seconds":seconds,"round_trips_per_second":packets as f64/seconds,"payload_mebibytes_per_second":packets as f64*args.payload_size as f64/seconds/1048576.0});
+    print_output(&report, &global.output_format, global.verbose);
     Ok(())
-} 
+}

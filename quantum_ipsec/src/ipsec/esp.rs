@@ -1,304 +1,125 @@
-//! Encapsulating Security Payload (ESP) implementation with post-quantum cryptography.
-//!
-//! This module provides ESP packet processing using Kyber for key encapsulation
-//! and Dilithium for authentication, with optional hybrid mode support.
-
-use crate::{QuantumIpsecError, Result};
-use crate::crypto::{
-    kyber::Kyber512,
-    dilithium::{Dilithium3, DilithiumSignature, DILITHIUM_SIGNATUREBYTES},
-};
-use crate::crypto::traits::{KeyEncapsulation, DigitalSignature};
-use crate::ipsec::sa::SecurityAssociation;
-use crate::ipsec::utils::IpHeader;
-use byteorder::{BigEndian, WriteBytesExt};
-use std::io::Cursor;
-use serde::{Deserialize, Serialize};
-
-/// ESP header structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
+//! RFC 4106 packet profile: SPI|SEQ|IV(8)|encrypted(payload|padding|PL|NH)|tag(16).
+//! Non-ESN, AES-256-GCM only. Receives previously provisioned directional keys.
+use super::sa::{Direction, SecurityAssociation};
+use crate::{crypto::symmetric, QuantumIpsecError as Error, Result};
+use zeroize::Zeroizing;
+pub const MAX_ESP_PACKET: usize = 65_535;
+pub const MAX_PLAINTEXT: usize = MAX_ESP_PACKET - 40;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EspHeader {
     pub spi: u32,
     pub sequence: u32,
-    pub iv: Option<Vec<u8>>,
 }
-
-/// ESP trailer structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EspTrailer {
-    pub pad_len: u8,
-    pub next_header: u8,
-    pub padding: Vec<u8>,
-}
-
-/// ESP packet structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EspPacket {
+#[derive(Debug)]
+pub struct EspPacket<'a> {
     pub header: EspHeader,
+    pub iv: [u8; 8],
+    pub ciphertext: &'a [u8],
+    pub tag: [u8; 16],
+}
+#[derive(Debug, PartialEq, Eq)]
+pub struct Decapsulated {
     pub payload: Vec<u8>,
-    pub trailer: EspTrailer,
-    pub auth_data: Option<Vec<u8>>,
+    pub next_header: u8,
 }
-
-/// ESP processor for quantum-safe packet encapsulation
-pub struct EspProcessor {
-    kyber_pk: <Kyber512 as KeyEncapsulation>::PublicKey,
-    kyber_sk: <Kyber512 as KeyEncapsulation>::SecretKey,
-    dilithium_pk: <Dilithium3 as DigitalSignature>::PublicKey,
-    dilithium_sk: <Dilithium3 as DigitalSignature>::SecretKey,
-    sequence_counter: u32,
-}
-
-impl EspProcessor {
-    pub fn new() -> Result<Self> {
-        let (kyber_pk, kyber_sk) = Kyber512::keygen();
-        let (dilithium_pk, dilithium_sk) = Dilithium3::keygen();
-        
+impl<'a> EspPacket<'a> {
+    pub fn parse(data: &'a [u8]) -> Result<Self> {
+        if data.len() < 36 || data.len() > MAX_ESP_PACKET || !data.len().is_multiple_of(4) {
+            return Err(Error::PacketError("ESP size".into()));
+        }
+        let spi = u32::from_be_bytes(data[0..4].try_into().map_err(|_| Error::Crypto)?);
+        let sequence = u32::from_be_bytes(data[4..8].try_into().map_err(|_| Error::Crypto)?);
+        if spi < 256 || sequence == 0 {
+            return Err(Error::PacketError("ESP SPI or sequence".into()));
+        }
         Ok(Self {
-            kyber_pk,
-            kyber_sk,
-            dilithium_pk,
-            dilithium_sk,
-            sequence_counter: 0,
+            header: EspHeader { spi, sequence },
+            iv: data[8..16].try_into().map_err(|_| Error::Crypto)?,
+            ciphertext: &data[16..data.len() - 16],
+            tag: data[data.len() - 16..]
+                .try_into()
+                .map_err(|_| Error::Crypto)?,
         })
     }
-
-    pub fn encapsulate_packet(
-        &mut self,
-        plaintext: &[u8],
-        spi: u32,
-        mode: EspMode,
-    ) -> Result<EspPacket> {
-        self.sequence_counter = self.sequence_counter.wrapping_add(1);
-        
-        let header = EspHeader {
-            spi,
-            sequence: self.sequence_counter,
-            iv: Some(self.generate_iv()),
-        };
-
-        let encrypted_payload = self.encrypt_payload(plaintext)?;
-        let trailer = self.create_trailer(plaintext.len(), mode)?;
-
-        let mut packet = EspPacket {
-            header,
-            payload: encrypted_payload,
-            trailer,
-            auth_data: None,
-        };
-
-        let auth_data = self.sign_packet(&packet)?;
-        packet.auth_data = Some(auth_data);
-
-        Ok(packet)
-    }
-
-    pub fn decapsulate_packet(
-        &self,
-        packet: &EspPacket,
-        _mode: EspMode,
-    ) -> Result<Vec<u8>> {
-        if let Some(auth_data) = &packet.auth_data {
-            if !self.verify_packet(packet, auth_data)? {
-                return Err(QuantumIpsecError::AuthError("ESP packet authentication failed".into()));
-            }
-        }
-
-        let decrypted_payload = self.decrypt_payload(&packet.payload)?;
-        let pad_len = packet.trailer.pad_len as usize;
-        
-        if pad_len > decrypted_payload.len() {
-            return Err(QuantumIpsecError::PacketError("Invalid padding length".into()));
-        }
-
-        let plaintext = decrypted_payload[..decrypted_payload.len() - pad_len].to_vec();
-        Ok(plaintext)
-    }
-
-    fn generate_iv(&self) -> Vec<u8> {
-        let mut iv = [0u8; 16];
-        getrandom::getrandom(&mut iv).expect("Failed to generate IV");
-        iv.to_vec()
-    }
-
-    fn encrypt_payload(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
-        let (_, shared_secret) = Kyber512::encapsulate(&self.kyber_pk);
-        let key = &shared_secret.as_ref()[..32];
-        
-        let mut encrypted = Vec::new();
-        for (i, &byte) in plaintext.iter().enumerate() {
-            encrypted.push(byte ^ key[i % 32]);
-        }
-        
-        Ok(encrypted)
-    }
-
-    fn decrypt_payload(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
-        let (_, shared_secret) = Kyber512::encapsulate(&self.kyber_pk);
-        let key = &shared_secret.as_ref()[..32];
-        
-        let mut decrypted = Vec::new();
-        for (i, &byte) in ciphertext.iter().enumerate() {
-            decrypted.push(byte ^ key[i % 32]);
-        }
-        
-        Ok(decrypted)
-    }
-
-    fn create_trailer(&self, payload_len: usize, mode: EspMode) -> Result<EspTrailer> {
-        let block_size = 16;
-        let header_size = 8;
-        let trailer_size = 2;
-        
-        let total_size = header_size + payload_len + trailer_size;
-        let padding_needed = (block_size - (total_size % block_size)) % block_size;
-        
-        let mut padding = Vec::new();
-        for i in 0..padding_needed {
-            padding.push(i as u8);
-        }
-        
-        Ok(EspTrailer {
-            pad_len: padding_needed as u8,
-            next_header: mode as u8,
-            padding,
-        })
-    }
-
-    fn sign_packet(&self, packet: &EspPacket) -> Result<Vec<u8>> {
-        let mut message = Vec::new();
-        
-        message.write_u32::<BigEndian>(packet.header.spi)
-            .map_err(|e| QuantumIpsecError::PacketError(format!("IO error: {}", e)))?;
-        message.write_u32::<BigEndian>(packet.header.sequence)
-            .map_err(|e| QuantumIpsecError::PacketError(format!("IO error: {}", e)))?;
-        if let Some(iv) = &packet.header.iv {
-            message.extend_from_slice(iv);
-        }
-        message.extend_from_slice(&packet.payload);
-        message.write_u8(packet.trailer.pad_len)
-            .map_err(|e| QuantumIpsecError::PacketError(format!("IO error: {}", e)))?;
-        message.write_u8(packet.trailer.next_header)
-            .map_err(|e| QuantumIpsecError::PacketError(format!("IO error: {}", e)))?;
-        message.extend_from_slice(&packet.trailer.padding);
-        
-        let signature = Dilithium3::sign(&self.dilithium_sk, &message);
-        Ok(signature.as_ref().to_vec())
-    }
-
-    fn verify_packet(&self, packet: &EspPacket, auth_data: &[u8]) -> Result<bool> {
-        let mut message = Vec::new();
-        
-        message.write_u32::<BigEndian>(packet.header.spi)
-            .map_err(|e| QuantumIpsecError::PacketError(format!("IO error: {}", e)))?;
-        message.write_u32::<BigEndian>(packet.header.sequence)
-            .map_err(|e| QuantumIpsecError::PacketError(format!("IO error: {}", e)))?;
-        if let Some(iv) = &packet.header.iv {
-            message.extend_from_slice(iv);
-        }
-        message.extend_from_slice(&packet.payload);
-        message.write_u8(packet.trailer.pad_len)
-            .map_err(|e| QuantumIpsecError::PacketError(format!("IO error: {}", e)))?;
-        message.write_u8(packet.trailer.next_header)
-            .map_err(|e| QuantumIpsecError::PacketError(format!("IO error: {}", e)))?;
-        message.extend_from_slice(&packet.trailer.padding);
-        
-        let signature_array: [u8; DILITHIUM_SIGNATUREBYTES] = auth_data.try_into()
-            .map_err(|_| QuantumIpsecError::PacketError("Invalid signature length".into()))?;
-        let signature = DilithiumSignature::from(signature_array);
-        
-        Ok(Dilithium3::verify(&self.dilithium_pk, &message, &signature))
-    }
 }
-
-/// ESP mode
-#[derive(Debug, Clone, Copy)]
-pub enum EspMode {
-    Tunnel = 4,
-    Transport = 6,
+/// Salt is per key, IV is the zero-extended packet counter. Never reset counter
+/// with the same key. Inbound peers may use any unique 64-bit explicit IV.
+pub fn nonce(salt: &[u8; 4], iv: &[u8; 8]) -> [u8; 12] {
+    let mut n = [0; 12];
+    n[..4].copy_from_slice(salt);
+    n[4..].copy_from_slice(iv);
+    n
 }
-
-/// High-level functions for ESP packet processing
-pub fn encrypt_packet(sa: &SecurityAssociation, plaintext: &[u8]) -> EspPacket {
-    let mut processor = EspProcessor::new().expect("Failed to create ESP processor");
-    
-    // Create ESP packet
-    let mut packet = EspPacket {
-        header: EspHeader {
-            spi: sa.spi,
-            sequence: sa.sequence,
-            iv: Some([0u8; 16].to_vec()),
-        },
-        payload: plaintext.to_vec(),
-        trailer: EspTrailer {
-            pad_len: 0,
-            next_header: 6, // TCP
-            padding: Vec::new(),
-        },
-        auth_data: None,
-    };
-
-    // Encrypt payload
-    let encrypted = processor.encrypt_payload(plaintext).expect("Encryption failed");
-    packet.payload = encrypted;
-
-    // Sign packet
-    let signature = processor.sign_packet(&packet).expect("Signing failed");
-    packet.auth_data = Some(signature);
-
-    packet
+pub fn encrypt_packet(
+    sa: &mut SecurityAssociation,
+    plaintext: &[u8],
+    next_header: u8,
+) -> Result<Vec<u8>> {
+    if plaintext.len() > MAX_PLAINTEXT {
+        return Err(Error::PacketError("ESP plaintext too large".into()));
+    }
+    let padding = (4 - (plaintext.len() + 2) % 4) % 4;
+    let protected_len = plaintext.len() + padding + 2;
+    sa.check_use(Direction::Outbound, protected_len)?;
+    // Reserve before encryption: even a failed seal must never reuse a nonce.
+    let sequence = sa.reserve_sequence()?;
+    let iv = u64::from(sequence).to_be_bytes();
+    let mut output = Vec::with_capacity(32 + protected_len);
+    output.extend_from_slice(&sa.spi().to_be_bytes());
+    output.extend_from_slice(&sequence.to_be_bytes());
+    output.extend_from_slice(&iv);
+    let mut body = Zeroizing::new(Vec::with_capacity(protected_len));
+    body.extend_from_slice(plaintext);
+    for i in 1..=padding {
+        body.push(i as u8);
+    }
+    body.push(padding as u8);
+    body.push(next_header);
+    let tag = symmetric::seal(
+        sa.traffic_key.key.expose(),
+        &nonce(sa.traffic_key.salt.expose(), &iv),
+        &output[..8],
+        &mut body,
+    )?;
+    output.extend_from_slice(&body);
+    output.extend_from_slice(&tag);
+    sa.account(protected_len);
+    Ok(output)
 }
-
-pub fn decrypt_packet(sa: &SecurityAssociation, packet: &EspPacket) -> Result<Vec<u8>> {
-    let processor = EspProcessor::new()?;
-    
-    // Verify authentication
-    if let Some(auth_data) = &packet.auth_data {
-        if !processor.verify_packet(packet, auth_data)? {
-            return Err(QuantumIpsecError::AuthError("ESP authentication failed".into()));
-        }
+pub fn decrypt_packet(sa: &mut SecurityAssociation, data: &[u8]) -> Result<Decapsulated> {
+    let packet = EspPacket::parse(data)?;
+    if packet.header.spi != sa.spi() {
+        return Err(Error::UnknownSa);
     }
-
-    // Decrypt payload
-    let decrypted = processor.decrypt_payload(&packet.payload)?;
-    Ok(decrypted)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_esp_round_trip() {
-        let mut processor = EspProcessor::new().unwrap();
-        let plaintext = b"Hello, quantum world!";
-        let spi = 12345;
-
-        // Encapsulate
-        let packet = processor.encapsulate_packet(plaintext, spi, EspMode::Tunnel).unwrap();
-
-        // Decapsulate
-        let decrypted = processor.decapsulate_packet(&packet, EspMode::Tunnel).unwrap();
-
-        assert_eq!(plaintext, decrypted.as_slice());
+    sa.check_use(Direction::Inbound, packet.ciphertext.len())?;
+    sa.replay.check(packet.header.sequence)?;
+    let mut body = Zeroizing::new(packet.ciphertext.to_vec());
+    symmetric::open(
+        sa.traffic_key.key.expose(),
+        &nonce(sa.traffic_key.salt.expose(), &packet.iv),
+        &data[..8],
+        &mut body,
+        &packet.tag,
+    )?;
+    let end = body.len(); // parser guarantees at least four encrypted bytes
+    let pad_len = usize::from(body[end - 2]);
+    let next_header = body[end - 1];
+    let payload_end = (end - 2)
+        .checked_sub(pad_len)
+        .ok_or_else(|| Error::PacketError("ESP padding length".into()))?;
+    if body[payload_end..end - 2]
+        .iter()
+        .enumerate()
+        .any(|(i, b)| *b != (i + 1) as u8)
+    {
+        return Err(Error::PacketError("ESP padding".into()));
     }
-
-    #[test]
-    fn test_esp_authentication_failure() {
-        let mut processor = EspProcessor::new().unwrap();
-        let plaintext = b"Hello, quantum world!";
-        let spi = 12345;
-
-        // Encapsulate
-        let mut packet = processor.encapsulate_packet(plaintext, spi, EspMode::Tunnel).unwrap();
-
-        // Tamper with packet
-        if let Some(auth_data) = &mut packet.auth_data {
-            auth_data[0] ^= 1; // Flip one bit
-        }
-
-        // Decapsulate should fail
-        let result = processor.decapsulate_packet(&packet, EspMode::Tunnel);
-        assert!(result.is_err());
-    }
+    // Exclusive SA access makes check/authenticate/commit one atomic operation.
+    // Neither forged high sequences nor bad padding can poison the window.
+    sa.replay.commit(packet.header.sequence)?;
+    sa.account(packet.ciphertext.len());
+    Ok(Decapsulated {
+        payload: body[..payload_end].to_vec(),
+        next_header,
+    })
 }

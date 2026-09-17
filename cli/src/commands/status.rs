@@ -1,22 +1,20 @@
+use crate::utils::{print_output, CliError};
 use clap::Args;
-use crate::utils::{CliError, print_output};
-use quantum_ipsec::{IpSecProcessor, QuantumIpsecConfig};
-
-/// Display active Security Associations (SAs) and related info.
 #[derive(Args, Debug, Clone)]
 pub struct StatusArgs {
-    /// Output as JSON
     #[arg(long)]
     pub json: bool,
-    /// Verbose output
-    #[arg(long)]
-    pub verbose: bool,
 }
-
-pub async fn run(_args: StatusArgs, global: &crate::Cli) -> Result<(), CliError> {
-    let config = QuantumIpsecConfig::default();
-    let ipsec = IpSecProcessor::new().map_err(CliError::from)?;
-    let stats = ipsec.get_stats();
-    print_output(&stats, &global.output_format, global.verbose);
+pub async fn run(args: StatusArgs, global: &crate::Cli) -> Result<(), CliError> {
+    let status = serde_json::json!({"runtime":"not-connected", "authenticated_ike":false, "qkd":false, "esp_primitive":"AES-256-GCM-16", "provisioning":"experimental external laboratory provisioning only", "active_sas":null});
+    print_output(
+        &status,
+        if args.json {
+            "json"
+        } else {
+            &global.output_format
+        },
+        global.verbose,
+    );
     Ok(())
-} 
+}

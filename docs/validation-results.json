@@ -1,0 +1,51 @@
+{
+  "validation_date": "2026-09-17",
+  "tests_debug": 42,
+  "tests_release": 42,
+  "clippy": "passed",
+  "rustfmt": "passed",
+  "fuzz": {
+    "sanitizer": "none",
+    "target": "aarch64-apple-darwin",
+    "toolchain": "nightly-2025-11-21",
+    "total_executions": 59139094,
+    "targets": [
+      {
+        "name": "ike_header",
+        "executions": 11320169,
+        "seconds": 11,
+        "result": "passed"
+      },
+      {
+        "name": "ike_payload",
+        "executions": 10890774,
+        "seconds": 11,
+        "result": "passed"
+      },
+      {
+        "name": "esp_packet",
+        "executions": 12186734,
+        "seconds": 11,
+        "result": "passed"
+      },
+      {
+        "name": "sa_proposal",
+        "executions": 11851000,
+        "seconds": 11,
+        "result": "passed"
+      },
+      {
+        "name": "ip_packet",
+        "executions": 12890417,
+        "seconds": 11,
+        "result": "passed"
+      }
+    ]
+  },
+  "asan": "not validated: runtime startup failed/timed out",
+  "rustsec": {
+    "advisories": 0,
+    "warnings": 0,
+    "database_commit": "f58ccfe51a5954186716998f01360d1079a8a3a5"
+  }
+}

@@ -1,135 +1,267 @@
-//! IKEv2 message parser implementation.
-//!
-//! This module implements the parsing of IKEv2 messages according to
-//! RFC 7296, including support for post-quantum cryptographic payloads.
-
-use crate::{QuantumIpsecError, Result};
-use crate::ike::exchange::IkeMessage;
-use crate::ike::proposal::IKEProposal;
-use core::convert::TryInto;
-use crate::ExchangeType;
-
-/// Parser for IKEv2 messages
-pub struct MessageParser {
-    /// Current position in the message buffer
-    position: usize,
-    /// Message buffer
-    buffer: Vec<u8>,
+//! Bounded structural IKEv2 parser. Parsing is never peer authentication.
+use super::exchange::{ExchangeType, IkeHeader, IkeMessage, Payload};
+use thiserror::Error;
+pub const MAX_IKE_MESSAGE: usize = 65_535;
+pub const MAX_PAYLOADS: usize = 64;
+pub const MAX_CERTIFICATE: usize = 16_384;
+pub const MAX_AUTH: usize = 16_384;
+pub const MAX_KE: usize = 16_384;
+pub const MAX_VENDOR: usize = 1024;
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum ParseError {
+    #[error("truncated input")]
+    Truncated,
+    #[error("invalid length")]
+    Length,
+    #[error("resource limit")]
+    Limit,
+    #[error("unsupported version")]
+    Version,
+    #[error("unsupported exchange")]
+    Exchange,
+    #[error("invalid SPI")]
+    Spi,
+    #[error("invalid flags")]
+    Flags,
+    #[error("invalid message ID")]
+    MessageId,
+    #[error("unsupported critical payload")]
+    CriticalPayload,
+    #[error("invalid payload chain")]
+    Chain,
+    #[error("duplicate singleton payload")]
+    Duplicate,
+    #[error("invalid payload body")]
+    Payload,
+    #[error("invalid proposal")]
+    Proposal,
+    #[error("unsupported fragmented IKE")]
+    Fragmentation,
 }
-
-impl MessageParser {
-    /// Creates a new message parser
-    pub fn new(buffer: Vec<u8>) -> Self {
-        Self {
-            position: 0,
-            buffer,
-        }
+pub type ParseResult<T> = std::result::Result<T, ParseError>;
+pub(crate) struct Reader<'a> {
+    data: &'a [u8],
+}
+impl<'a> Reader<'a> {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        Self { data }
     }
-
-    /// Parses an IKEv2 message from the buffer
-    pub fn parse_message(&mut self) -> Result<IkeMessage> {
-        // Parse IKE header
-        let message_id = self.parse_u32()?;
-        let exchange_type = self.parse_exchange_type(34)?;
-        
-        // Parse proposal
-        let proposal = self.parse_proposal()?;
-        
-        // Parse nonce
-        let nonce = self.parse_nonce()?;
-        
-        // Create message
-        let mut message = IkeMessage::new(0, 0, exchange_type, message_id);
-        
-        // Parse encrypted payload if present
-        if self.has_encrypted_payload() {
-            let payload = self.parse_encrypted_payload()?;
-            message.add_payload(payload);
-        }
-        
-        Ok(message)
+    pub(crate) fn remaining(&self) -> usize {
+        self.data.len()
     }
-
-    /// Parses a 32-bit unsigned integer
-    fn parse_u32(&mut self) -> Result<u32> {
-        if self.position + 4 > self.buffer.len() {
-            return Err(QuantumIpsecError::PacketError("Mensagem inválida".into()));
-        }
-        let value = u32::from_be_bytes(
-            self.buffer[self.position..self.position + 4]
+    pub(crate) fn take(&mut self, n: usize) -> ParseResult<&'a [u8]> {
+        let out = self.data.get(..n).ok_or(ParseError::Truncated)?;
+        self.data = self.data.get(n..).ok_or(ParseError::Truncated)?;
+        Ok(out)
+    }
+    pub(crate) fn u8(&mut self) -> ParseResult<u8> {
+        self.take(1)?.first().copied().ok_or(ParseError::Truncated)
+    }
+    pub(crate) fn u16(&mut self) -> ParseResult<u16> {
+        Ok(u16::from_be_bytes(
+            self.take(2)?
                 .try_into()
-                .unwrap(),
-        );
-        self.position += 4;
-        Ok(value)
+                .map_err(|_| ParseError::Truncated)?,
+        ))
     }
-
-    /// Parses the exchange type
-    fn parse_exchange_type(&self, value: u8) -> Result<crate::ike::exchange::ExchangeType> {
-        match value {
-            34 => Ok(crate::ike::exchange::ExchangeType::IKE_SA_INIT),
-            35 => Ok(crate::ike::exchange::ExchangeType::IKE_AUTH),
-            36 => Ok(crate::ike::exchange::ExchangeType::CREATE_CHILD_SA),
-            37 => Ok(crate::ike::exchange::ExchangeType::INFORMATIONAL),
-            _ => Err(QuantumIpsecError::PacketError("Unknown exchange type".into())),
-        }
+    pub(crate) fn u32(&mut self) -> ParseResult<u32> {
+        Ok(u32::from_be_bytes(
+            self.take(4)?
+                .try_into()
+                .map_err(|_| ParseError::Truncated)?,
+        ))
     }
-
-    /// Parses a security proposal
-    fn parse_proposal(&mut self) -> Result<IKEProposal> {
-        // TODO: Implement proposal parsing
-        Ok(IKEProposal::default())
-    }
-
-    /// Parses a nonce
-    fn parse_nonce(&mut self) -> Result<[u8; 32]> {
-        if self.position + 32 > self.buffer.len() {
-            return Err(QuantumIpsecError::PacketError("Não há espaço suficiente para o nonce".into()));
-        }
-        let nonce = self.buffer[self.position..self.position + 32]
-            .try_into()
-            .unwrap();
-        self.position += 32;
-        Ok(nonce)
-    }
-
-    /// Checks if there is an encrypted payload
-    fn has_encrypted_payload(&self) -> bool {
-        self.position < self.buffer.len()
-    }
-
-    /// Parses an encrypted payload
-    fn parse_encrypted_payload(&mut self) -> Result<Vec<u8>> {
-        let length = self.parse_u32()? as usize;
-        if self.position + length > self.buffer.len() {
-            return Err(QuantumIpsecError::PacketError("Mensagem inválida".into()));
-        }
-        let payload = self.buffer[self.position..self.position + length].to_vec();
-        self.position += length;
-        Ok(payload)
+    pub(crate) fn u64(&mut self) -> ParseResult<u64> {
+        Ok(u64::from_be_bytes(
+            self.take(8)?
+                .try_into()
+                .map_err(|_| ParseError::Truncated)?,
+        ))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_u32() {
-        let mut parser = MessageParser::new(vec![0, 0, 0, 1]);
-        assert_eq!(parser.parse_u32().unwrap(), 1);
+pub fn parse_header(data: &[u8]) -> ParseResult<IkeHeader> {
+    if data.len() > MAX_IKE_MESSAGE {
+        return Err(ParseError::Limit);
     }
-
-    #[test]
-    fn test_parse_exchange_type() {
-        let mut parser = MessageParser::new(vec![0, 0, 0, 34]);
-        assert_eq!(parser.parse_exchange_type(34).unwrap(), ExchangeType::IKE_SA_INIT);
+    let mut r = Reader::new(data);
+    let initiator_spi = r.u64()?;
+    let responder_spi = r.u64()?;
+    let next_payload = r.u8()?;
+    let version = r.u8()?;
+    let exchange_type = ExchangeType::try_from(r.u8()?)?;
+    let flags = r.u8()?;
+    let message_id = r.u32()?;
+    let length = r.u32()?;
+    if version >> 4 != 2 {
+        return Err(ParseError::Version);
     }
-
-    #[test]
-    fn test_parse_nonce() {
-        let nonce = [1u8; 32];
-        let mut parser = MessageParser::new(nonce.to_vec());
-        assert_eq!(parser.parse_nonce().unwrap(), nonce);
+    if length as usize != data.len() {
+        return Err(ParseError::Length);
     }
-} 
+    if initiator_spi == 0 {
+        return Err(ParseError::Spi);
+    }
+    // Reserved bits are ignored on receipt per RFC 7296; only defined flags used.
+    if exchange_type == ExchangeType::IkeSaInit {
+        if message_id != 0 {
+            return Err(ParseError::MessageId);
+        }
+        if flags & 0x20 == 0 && (responder_spi != 0 || flags & 0x08 == 0) {
+            return Err(ParseError::Spi);
+        }
+        if flags & 0x20 != 0 && flags & 0x08 != 0 {
+            return Err(ParseError::Flags);
+        }
+    } else if responder_spi == 0 {
+        return Err(ParseError::Spi);
+    }
+    Ok(IkeHeader {
+        initiator_spi,
+        responder_spi,
+        next_payload,
+        version,
+        exchange_type,
+        flags,
+        message_id,
+        length,
+    })
+}
+pub fn parse_message(data: &[u8]) -> ParseResult<IkeMessage<'_>> {
+    let header = parse_header(data)?;
+    let payloads = parse_payloads(
+        header.next_payload,
+        data.get(28..).ok_or(ParseError::Truncated)?,
+    )?;
+    if header.exchange_type == ExchangeType::IkeSaInit && payloads.iter().any(|p| p.kind == 46) {
+        return Err(ParseError::Payload);
+    }
+    Ok(IkeMessage { header, payloads })
+}
+/// SK is opaque: its next-payload describes decrypted content, not another
+/// outer payload. Decrypted inner parsing requires a separately authenticated API.
+pub fn parse_payloads(mut kind: u8, data: &[u8]) -> ParseResult<Vec<Payload<'_>>> {
+    if data.len() > MAX_IKE_MESSAGE - 28 {
+        return Err(ParseError::Limit);
+    }
+    let mut r = Reader::new(data);
+    let mut result = Vec::new();
+    let mut seen = [false; 256];
+    while kind != 0 {
+        if result.len() >= MAX_PAYLOADS {
+            return Err(ParseError::Limit);
+        }
+        let next = r.u8()?;
+        let flags = r.u8()?;
+        let length = usize::from(r.u16()?);
+        let size = length.checked_sub(4).ok_or(ParseError::Length)?;
+        if kind == 53 {
+            return Err(ParseError::Fragmentation);
+        }
+        let known = (33..=48).contains(&kind);
+        if !known && flags & 0x80 != 0 {
+            return Err(ParseError::CriticalPayload);
+        }
+        let singleton = matches!(kind, 33..=36 | 39 | 40 | 44..=48);
+        if singleton && seen[kind as usize] {
+            return Err(ParseError::Duplicate);
+        }
+        seen[kind as usize] = true;
+        let limit = match kind {
+            34 => MAX_KE,
+            37 | 38 => MAX_CERTIFICATE,
+            39 => MAX_AUTH,
+            43 => MAX_VENDOR,
+            _ => MAX_IKE_MESSAGE - 28,
+        };
+        if size > limit {
+            return Err(ParseError::Limit);
+        }
+        let body = r.take(size)?;
+        match kind {
+            33 => {
+                super::proposal::parse_proposals(body)?;
+            }
+            34 if size < 5 => return Err(ParseError::Payload),
+            35 | 36 | 39 if size < 5 => return Err(ParseError::Payload),
+            37 | 38 if size < 1 => return Err(ParseError::Payload),
+            40 if !(16..=256).contains(&size) => return Err(ParseError::Payload),
+            41 => {
+                let mut n = Reader::new(body);
+                n.u8()?;
+                let spi_len = n.u8()? as usize;
+                n.u16()?;
+                n.take(spi_len)?;
+            }
+            42 => {
+                let mut d = Reader::new(body);
+                let protocol = d.u8()?;
+                let spi_len = d.u8()? as usize;
+                let count = d.u16()? as usize;
+                if !matches!((protocol, spi_len), (1, 0) | (2, 4) | (3, 4))
+                    || (protocol == 1 && count != 0)
+                    || d.remaining() != spi_len * count
+                {
+                    return Err(ParseError::Payload);
+                }
+            }
+            44 | 45 => validate_selectors(body)?,
+            46 if size < 1 => return Err(ParseError::Payload),
+            47 if size < 4 => return Err(ParseError::Payload),
+            48 if size < 4 => return Err(ParseError::Payload),
+            _ => {}
+        }
+        result.push(Payload {
+            kind,
+            critical: flags & 0x80 != 0,
+            next_payload: next,
+            body,
+        });
+        if kind == 46 {
+            if r.remaining() != 0 {
+                return Err(ParseError::Chain);
+            }
+            return Ok(result);
+        }
+        kind = next;
+    }
+    if r.remaining() != 0 {
+        return Err(ParseError::Chain);
+    }
+    Ok(result)
+}
+fn validate_selectors(body: &[u8]) -> ParseResult<()> {
+    let mut r = Reader::new(body);
+    let count = r.u8()?;
+    r.take(3)?;
+    if count == 0 || count > 32 {
+        return Err(ParseError::Limit);
+    }
+    for _ in 0..count {
+        let kind = r.u8()?;
+        r.u8()?;
+        let len = r.u16()?;
+        let expected = match kind {
+            7 => 16,
+            8 => 40,
+            _ => return Err(ParseError::Payload),
+        };
+        if len != expected {
+            return Err(ParseError::Length);
+        }
+        let start = r.u16()?;
+        let end = r.u16()?;
+        if start > end {
+            return Err(ParseError::Payload);
+        }
+        let size = if kind == 7 { 4 } else { 16 };
+        let first = r.take(size)?;
+        let last = r.take(size)?;
+        if first > last {
+            return Err(ParseError::Payload);
+        }
+    }
+    if r.remaining() != 0 {
+        return Err(ParseError::Length);
+    }
+    Ok(())
+}
