@@ -26,6 +26,8 @@ pub struct Cli {
 pub enum Commands {
     Init(commands::init::InitArgs),
     Connect(commands::connect::ConnectArgs),
+    /// Authenticate a single peer over UDP without establishing an ESP tunnel.
+    IkeHandshake(commands::ike_handshake::HandshakeArgs),
     Status(commands::status::StatusArgs),
     Encrypt(commands::encrypt::EncryptArgs),
     Decrypt(commands::decrypt::DecryptArgs),
@@ -40,6 +42,7 @@ async fn main() -> Result<(), utils::CliError> {
     match &cli.command {
         Commands::Init(args) => commands::init::run(args.clone(), &cli).await,
         Commands::Connect(args) => commands::connect::run(args.clone(), &cli).await,
+        Commands::IkeHandshake(args) => commands::ike_handshake::run(args.clone(), &cli),
         Commands::Status(args) => commands::status::run(args.clone(), &cli).await,
         Commands::Encrypt(args) => commands::encrypt::run(args.clone(), &cli).await,
         Commands::Decrypt(args) => commands::decrypt::run(args.clone(), &cli).await,

@@ -74,7 +74,8 @@ impl std::fmt::Debug for SecurityAssociation {
     }
 }
 impl SecurityAssociation {
-    /// Provision ONLY after external authentication in laboratory integrations.
+    /// Used internally for authenticated IKE CHILD_SAs; external laboratory
+    /// integrations must authenticate their own provisioning context.
     /// Never reinstall identical key material with a reset packet counter.
     pub fn new(
         spi: u32,

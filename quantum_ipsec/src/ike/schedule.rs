@@ -6,7 +6,7 @@ use sha2::Sha256;
 use zeroize::{Zeroize, Zeroizing};
 type Prf = Hmac<Sha256>;
 
-fn prf(key: &[u8], parts: &[&[u8]]) -> Result<SecretBytes<32>> {
+pub(super) fn prf(key: &[u8], parts: &[&[u8]]) -> Result<SecretBytes<32>> {
     let mut mac = Prf::new_from_slice(key).map_err(|_| Error::Crypto)?;
     for p in parts {
         mac.update(p);

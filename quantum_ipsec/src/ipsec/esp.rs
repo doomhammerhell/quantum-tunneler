@@ -87,6 +87,14 @@ pub fn encrypt_packet(
     Ok(output)
 }
 pub fn decrypt_packet(sa: &mut SecurityAssociation, data: &[u8]) -> Result<Decapsulated> {
+    decrypt_packet_checked(sa, data, |_, _| Ok(()))
+}
+/// Enforce negotiated selectors before committing replay/counters or releasing plaintext.
+pub(crate) fn decrypt_packet_checked(
+    sa: &mut SecurityAssociation,
+    data: &[u8],
+    authorize: impl FnOnce(&[u8], u8) -> Result<()>,
+) -> Result<Decapsulated> {
     let packet = EspPacket::parse(data)?;
     if packet.header.spi != sa.spi() {
         return Err(Error::UnknownSa);
@@ -116,6 +124,7 @@ pub fn decrypt_packet(sa: &mut SecurityAssociation, data: &[u8]) -> Result<Decap
     }
     // Exclusive SA access makes check/authenticate/commit one atomic operation.
     // Neither forged high sequences nor bad padding can poison the window.
+    authorize(&body[..payload_end], next_header)?;
     sa.replay.commit(packet.header.sequence)?;
     sa.account(packet.ciphertext.len());
     Ok(Decapsulated {
